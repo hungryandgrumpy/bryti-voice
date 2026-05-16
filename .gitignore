@@ -29,3 +29,6 @@ out2.txt
 
 # Planning documents (in gitignored dirs)
 plans/
+
+# Node version manager
+.nvmrc

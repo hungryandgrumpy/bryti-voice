@@ -8,6 +8,11 @@ describe("TelegramBridge", () => {
     expect(bridge.name).toBe("telegram");
     expect(bridge.platform).toBe("telegram");
   });
+
+  it("exposes voice sending support", () => {
+    const bridge = new TelegramBridge("test-token", []);
+    expect(typeof bridge.sendVoice).toBe("function");
+  });
 });
 
 describe("markdownToHtml", () => {
