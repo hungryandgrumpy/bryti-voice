@@ -34,7 +34,7 @@ import {
 import { createProjectionStore } from "./projection/index.js";
 import { createModelInfra } from "./model-infra.js";
 import type { Scheduler } from "./scheduler.js";
-import type { IncomingMessage, ChannelBridge } from "./channels/types.js";
+import type { AudioAttachment, IncomingMessage, ChannelBridge } from "./channels/types.js";
 import type { VoiceService } from "./voice.js";
 import {
   createTrustStore,
@@ -152,6 +152,30 @@ function modelNameForLog(
 
 const DEFAULT_VOICE_MESSAGE_TEXT = "The user sent a voice message.";
 
+function shouldKeepVoiceTempFiles(state: AppState): boolean {
+  return state.config.voice?.keep_temp_files === true;
+}
+
+function cleanupPath(kind: "incoming" | "outgoing", filePath: string): void {
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch (err) {
+    console.warn(`[voice] Failed to clean up ${kind} temp file ${filePath}:`, (err as Error).message);
+  }
+}
+
+function cleanupIncomingAudioFiles(state: AppState, audio?: AudioAttachment[]): void {
+  if (shouldKeepVoiceTempFiles(state) || !audio || audio.length === 0) return;
+  for (const attachment of audio) {
+    if (attachment?.path) cleanupPath("incoming", attachment.path);
+  }
+}
+
+function cleanupOutgoingAudioFile(state: AppState, audioPath: string): void {
+  if (shouldKeepVoiceTempFiles(state) || !audioPath) return;
+  cleanupPath("outgoing", audioPath);
+}
+
 function voicePromptText(transcript: string, originalText: string): string {
   const cleaned = originalText.trim();
   const parts = ["[Voice message transcript]", transcript.trim()];
@@ -178,11 +202,13 @@ async function prepareVoiceMessage(state: AppState, msg: IncomingMessage): Promi
 
   try {
     const transcript = await state.voiceService.transcribe(msg.audio);
+    cleanupIncomingAudioFiles(state, msg.audio);
     return {
       ...msg,
       text: voicePromptText(transcript, msg.text),
     };
   } catch (err) {
+    cleanupIncomingAudioFiles(state, msg.audio);
     console.warn(`[voice] Transcription failed for ${msg.userId}:`, (err as Error).message);
     await bridge.sendMessage(msg.channelId, "I couldn't transcribe that voice message. Please send text or try again.");
     return null;
@@ -198,11 +224,14 @@ async function sendAssistantResponse(state: AppState, msg: IncomingMessage, text
     state.voiceService &&
     bridge.sendVoice
   ) {
+    let audioPath = "";
     try {
-      const audioPath = await state.voiceService.synthesize(text);
+      audioPath = await state.voiceService.synthesize(text);
       await bridge.sendVoice(msg.channelId, audioPath);
+      cleanupOutgoingAudioFile(state, audioPath);
       return;
     } catch (err) {
+      if (audioPath) cleanupOutgoingAudioFile(state, audioPath);
       console.warn(`[voice] Synthesis/send failed for ${msg.userId}, falling back to text:`, (err as Error).message);
     }
   }

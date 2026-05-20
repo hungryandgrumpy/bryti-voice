@@ -62,6 +62,8 @@ export interface VoiceConfig {
   synthesize_command: string[];
   /** Reply to voice messages with synthesized voice when possible. */
   reply_with_voice: boolean;
+  /** Keep temporary audio files for debugging instead of deleting them after use. */
+  keep_temp_files: boolean;
   /** Timeout for each STT/TTS command invocation. */
   command_timeout_ms: number;
   /** Extension for synthesized audio files, e.g. .ogg. */
@@ -408,6 +410,7 @@ function voiceFromConfig(substituted: Record<string, unknown>): VoiceConfig {
     transcribe_command: stringArray(raw.transcribe_command),
     synthesize_command: stringArray(raw.synthesize_command),
     reply_with_voice: raw.reply_with_voice !== false,
+    keep_temp_files: booleanFrom(raw.keep_temp_files, false),
     command_timeout_ms: toFiniteNumber(raw.command_timeout_ms) ?? 120000,
     synthesized_audio_extension: (raw.synthesized_audio_extension as string | undefined) ?? ".ogg",
     max_tts_chars: toFiniteNumber(raw.max_tts_chars) ?? 2500,

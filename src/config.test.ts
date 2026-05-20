@@ -340,6 +340,7 @@ cron: []
       transcribe_command: [],
       synthesize_command: [],
       reply_with_voice: true,
+      keep_temp_files: false,
       command_timeout_ms: 120000,
       synthesized_audio_extension: ".ogg",
       max_tts_chars: 2500,
@@ -364,6 +365,7 @@ voice:
   transcribe_command: ["stt", "{input}", "--out", "{output}"]
   synthesize_command: ["tts", "{input}", "--out", "{output}"]
   reply_with_voice: true
+  keep_temp_files: true
   command_timeout_ms: 30000
   synthesized_audio_extension: ".opus"
   max_tts_chars: 1000
@@ -378,6 +380,7 @@ cron: []
       transcribe_command: ["stt", "{input}", "--out", "{output}"],
       synthesize_command: ["tts", "{input}", "--out", "{output}"],
       reply_with_voice: true,
+      keep_temp_files: true,
       command_timeout_ms: 30000,
       synthesized_audio_extension: ".opus",
       max_tts_chars: 1000,
@@ -407,6 +410,51 @@ cron: []
 
     expect(() => loadConfig()).toThrow("voice.transcribe_command must include {input}");
     expect(() => loadConfig()).toThrow("voice.transcribe_command must include {output}");
+  });
+
+  it("defaults keep_temp_files to false and parses explicit true", () => {
+    const defaultConfigContent = `
+agent:
+  name: TestBot
+  model: test/model
+telegram:
+  token: test-token
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+voice:
+  enabled: true
+  transcribe_command: ["stt", "{input}", "{output}"]
+  synthesize_command: ["tts", "{input}", "{output}"]
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), defaultConfigContent);
+    expect(loadConfig().voice?.keep_temp_files).toBe(false);
+
+    const explicitConfigContent = `
+agent:
+  name: TestBot
+  model: test/model
+telegram:
+  token: test-token
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+voice:
+  enabled: true
+  transcribe_command: ["stt", "{input}", "{output}"]
+  synthesize_command: ["tts", "{input}", "{output}"]
+  keep_temp_files: true
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), explicitConfigContent);
+    expect(loadConfig().voice?.keep_temp_files).toBe(true);
   });
 
   it("requires synthesize command only when voice replies are enabled", () => {

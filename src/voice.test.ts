@@ -12,6 +12,7 @@ function baseVoiceConfig(overrides: Partial<VoiceConfig> = {}): VoiceConfig {
     transcribe_command: [],
     synthesize_command: [],
     reply_with_voice: true,
+    keep_temp_files: false,
     command_timeout_ms: 1000,
     synthesized_audio_extension: ".ogg",
     max_tts_chars: 2500,

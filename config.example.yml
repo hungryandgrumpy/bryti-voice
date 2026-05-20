@@ -179,6 +179,7 @@ tools:
 #   transcribe_command: ["/path/to/stt", "{input}", "--output", "{output}"]
 #   synthesize_command: ["/path/to/tts", "{input}", "--output", "{output}"]
 #   reply_with_voice: true
+#   keep_temp_files: false
 #   command_timeout_ms: 120000
 #   synthesized_audio_extension: ".ogg"
 #   max_tts_chars: 2500
