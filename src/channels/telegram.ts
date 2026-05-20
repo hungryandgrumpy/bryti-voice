@@ -19,6 +19,11 @@ import os from "node:os";
 import path from "node:path";
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
 import type { ApprovalResult, AudioAttachment, ChannelBridge, IncomingMessage, SendOpts } from "./types.js";
+import {
+  normalizeTelegramImageMessage,
+  normalizeTelegramTextMessage,
+  normalizeTelegramVoiceMessage,
+} from "./telegram-normalize.js";
 import { markdownToIR, chunkMarkdownIR, type MarkdownLinkSpan } from "./markdown/ir.js";
 import { renderMarkdownWithMarkers } from "./markdown/render.js";
 import {
@@ -349,15 +354,17 @@ export class TelegramBridge implements ChannelBridge {
       const text = ctx.message.text;
       if (!text) return;
 
+      const fromId = ctx.from?.id;
+      if (fromId == null) return;
+
       if (this.handler) {
-        const msg: IncomingMessage = {
-          channelId: String(ctx.chat.id),
-          userId: String(ctx.from?.id),
+        await this.handler(normalizeTelegramTextMessage({
+          chatId: ctx.chat.id,
+          fromId,
+          messageId: ctx.message.message_id,
           text,
-          platform: "telegram",
           raw: ctx.message,
-        };
-        await this.handler(msg);
+        }));
       }
     });
 
@@ -417,15 +424,14 @@ export class TelegramBridge implements ChannelBridge {
 
       // Single photo (no album)
       const text = caption || "The user sent this image.";
-      const msg: IncomingMessage = {
-        channelId,
-        userId,
+      await this.handler(normalizeTelegramImageMessage({
+        chatId: channelId,
+        fromId: userId,
+        messageId: ctx.message.message_id,
         text,
-        platform: "telegram",
         raw: ctx.message,
         images: image,
-      };
-      await this.handler(msg);
+      }));
     });
 
     // Handle Telegram voice notes. Audio is downloaded to a temporary local
@@ -444,16 +450,16 @@ export class TelegramBridge implements ChannelBridge {
         return;
       }
 
-      const msg: IncomingMessage = {
-        channelId: String(ctx.chat.id),
-        userId: String(ctx.from?.id),
-        text: "The user sent a voice message.",
-        platform: "telegram",
+      const fromId = ctx.from?.id;
+      if (fromId == null) return;
+
+      await this.handler(normalizeTelegramVoiceMessage({
+        chatId: ctx.chat.id,
+        fromId,
+        messageId: ctx.message.message_id,
         raw: ctx.message,
         audio,
-        replyMode: "voice",
-      };
-      await this.handler(msg);
+      }));
     });
 
     // Handle document messages that are images (sent as files instead of photos)
@@ -479,15 +485,17 @@ export class TelegramBridge implements ChannelBridge {
       }
 
       const text = ctx.message.caption?.trim() || "The user sent this image.";
-      const msg: IncomingMessage = {
-        channelId: String(ctx.chat.id),
-        userId: String(ctx.from?.id),
+      const fromId = ctx.from?.id;
+      if (fromId == null) return;
+
+      await this.handler(normalizeTelegramImageMessage({
+        chatId: ctx.chat.id,
+        fromId,
+        messageId: ctx.message.message_id,
         text,
-        platform: "telegram",
         raw: ctx.message,
         images,
-      };
-      await this.handler(msg);
+      }));
     });
 
     // Handle non-text messages
@@ -786,18 +794,16 @@ export class TelegramBridge implements ChannelBridge {
     if (!this.handler || entry.images.length === 0) return;
 
     const text = entry.caption || "The user sent this image.";
-    const msg: IncomingMessage = {
-      channelId: entry.channelId,
-      userId: entry.userId,
-      text,
-      platform: "telegram",
-      raw: entry.raw,
-      images: entry.images,
-    };
 
     console.log(`[telegram] Flushing media group ${mediaGroupId}: ${entry.images.length} image(s)`);
     try {
-      await this.handler(msg);
+      await this.handler(normalizeTelegramImageMessage({
+        chatId: entry.channelId,
+        fromId: entry.userId,
+        text,
+        raw: entry.raw,
+        images: entry.images,
+      }));
     } catch (err) {
       console.error("[telegram] Media group handler error:", (err as Error).message);
     }
