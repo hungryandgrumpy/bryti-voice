@@ -15,6 +15,8 @@ export interface PairedDeviceRecord {
   lastSeenAt: string | null;
   status: "active" | "revoked";
   notes: string;
+  lastInboundCounter: number;
+  lastOutboundCounter: number;
 }
 
 export interface PairedDevicesFile {

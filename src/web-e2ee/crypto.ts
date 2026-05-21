@@ -20,6 +20,18 @@ export async function importPrivateKeyJwk(jwk: JsonWebKey): Promise<CryptoKey> {
   return crypto.subtle.importKey("jwk", jwk, { name: "X25519" }, false, ["deriveBits"]);
 }
 
+export function assertValidPublicX25519Jwk(jwk: JsonWebKey): void {
+  if (
+    jwk.kty !== "OKP" ||
+    jwk.crv !== "X25519" ||
+    typeof jwk.x !== "string" ||
+    !jwk.x ||
+    typeof jwk.d === "string"
+  ) {
+    throw new Error("Invalid X25519 public JWK");
+  }
+}
+
 export async function exportRawPublicKey(publicKey: CryptoKey): Promise<Uint8Array> {
   const raw = await crypto.subtle.exportKey("raw", publicKey);
   return new Uint8Array(raw);

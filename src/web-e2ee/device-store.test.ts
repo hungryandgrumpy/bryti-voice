@@ -29,11 +29,15 @@ describe("web-e2ee device store", () => {
       lastSeenAt: null,
       status: "active",
       notes: "",
+      lastInboundCounter: 0,
+      lastOutboundCounter: 0,
     });
 
     const reloaded = createDeviceStore(tempDir).list();
     expect(reloaded).toHaveLength(1);
     expect(reloaded[0].publicKeyFingerprint).toBe(publicKeyFingerprint);
+    expect(reloaded[0].lastInboundCounter).toBe(0);
+    expect(reloaded[0].lastOutboundCounter).toBe(0);
     expect(fs.existsSync(pairedDevicesPath(tempDir))).toBe(true);
   });
 
@@ -50,6 +54,8 @@ describe("web-e2ee device store", () => {
       lastSeenAt: null,
       status: "active" as const,
       notes: "",
+      lastInboundCounter: 0,
+      lastOutboundCounter: 0,
     };
 
     await store.add({ ...base, deviceId: "wed_same" });
@@ -72,6 +78,8 @@ describe("web-e2ee device store", () => {
       lastSeenAt: null,
       status: "active",
       notes: "",
+      lastInboundCounter: 0,
+      lastOutboundCounter: 0,
     });
 
     store.markSeen("wed_seen", "2026-01-01T00:00:00.000Z");

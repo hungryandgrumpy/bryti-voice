@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  assertValidPublicX25519Jwk,
   exportPrivateKeyJwk,
   exportPublicKeyJwk,
   exportRawPublicKey,
@@ -56,5 +57,15 @@ describe("web-e2ee crypto", () => {
     expect(code).toMatch(/^[A-Z2-9]{4}(?:-[A-Z2-9]{4}){3}$/);
     expect(hashA).toBe(hashB);
     expect(hashA.startsWith("sha256:")).toBe(true);
+  });
+
+  it("validates public X25519 JWKs", async () => {
+    const pair = await generateX25519KeyPair();
+    const publicJwk = await exportPublicKeyJwk(pair.publicKey);
+
+    expect(() => assertValidPublicX25519Jwk(publicJwk)).not.toThrow();
+    expect(() => assertValidPublicX25519Jwk({ kty: "EC", crv: "P-256", x: "abc" })).toThrow(
+      "Invalid X25519 public JWK",
+    );
   });
 });

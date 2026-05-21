@@ -1,9 +1,27 @@
-// src/web-e2ee/static/app.js     
+import {
+  loadDevicePrivateKey,
+  loadPairedState,
+  saveDeviceKeyPair,
+  savePairedState,
+} from "./idb.js";
+
 const httpStatusEl = document.getElementById("http-status");
 const wsStatusEl = document.getElementById("ws-status");
 const serverFingerprintEl = document.getElementById("server-fingerprint");
 const protocolVersionEl = document.getElementById("protocol-version");
-const transportNoteEl = document.getElementById("transport-note");
+const pairingStatusEl = document.getElementById("pairing-status");
+const pairingMessageEl = document.getElementById("pairing-message");
+const deviceLabelEl = document.getElementById("device-label");
+const inviteCodeEl = document.getElementById("invite-code");
+const pairButtonEl = document.getElementById("pair-button");
+
+function supportsRequiredCrypto() {
+  return !!(
+    window.indexedDB &&
+    window.crypto?.subtle &&
+    typeof CryptoKey !== "undefined"
+  );
+}
 
 async function loadServerInfo() {
   try {
@@ -15,58 +33,110 @@ async function loadServerInfo() {
     httpStatusEl.textContent = "Connected";
     serverFingerprintEl.textContent = info.serverPublicFingerprint || "Unavailable";
     protocolVersionEl.textContent = `v${info.protocolVersion} (${info.designVersion})`;
-    transportNoteEl.textContent = info.chatEnabled
-      ? "Chat available"
-      : "Transport shell only. Encrypted chat is not implemented yet.";
     return info;
   } catch (error) {
     httpStatusEl.textContent = "Failed";
     serverFingerprintEl.textContent = "Unavailable";
     protocolVersionEl.textContent = "Unavailable";
-    transportNoteEl.textContent = `Could not load server info: ${error instanceof Error ? error.message : String(error)}`;
+    pairingMessageEl.textContent = `Could not load server info: ${error instanceof Error ? error.message : String(error)}`;
     return null;
   }
 }
 
-function webSocketUrl(pathPrefix) {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const prefix = !pathPrefix || pathPrefix === "/"
-    ? ""
-    : pathPrefix.endsWith("/") ? pathPrefix.slice(0, -1) : pathPrefix;
-  return `${protocol}//${window.location.host}${prefix}/ws`;
+async function restorePairedState() {
+  const state = await loadPairedState();
+  const privateKey = await loadDevicePrivateKey();
+  if (!state || !privateKey) {
+    pairingStatusEl.textContent = "Not paired";
+    return null;
+  }
+
+  pairingStatusEl.textContent = `Paired as ${state.deviceId}`;
+  pairingMessageEl.textContent = `Stored server fingerprint: ${state.serverPublicFingerprint}`;
+  if (state.label) {
+    deviceLabelEl.value = state.label;
+  }
+  return state;
 }
 
-function openWebSocket(info) {
-  const ws = new WebSocket(webSocketUrl(info.pathPrefix));
+async function generateDeviceKeyPair() {
+  // Chromium WebCrypto allows exporting the generated public key JWK while
+  // keeping the private key non-extractable, which is the desired v1 behavior.
+  return await crypto.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"]);
+}
 
-  wsStatusEl.textContent = "Connecting";
+async function pairDevice(info) {
+  if (!supportsRequiredCrypto()) {
+    pairingMessageEl.textContent = "This browser is not supported. Use a current Chromium-based browser.";
+    return;
+  }
 
-  ws.addEventListener("open", () => {
-    wsStatusEl.textContent = "Connected";
-    ws.send(JSON.stringify({ kind: "status" }));
-  });
+  const label = deviceLabelEl.value.trim();
+  const code = inviteCodeEl.value.trim();
+  if (!label || !code) {
+    pairingMessageEl.textContent = "Device label and invite code are required.";
+    return;
+  }
 
-  ws.addEventListener("message", (event) => {
-    try {
-      const payload = JSON.parse(event.data);
-      if (payload.kind === "hello") {
-        wsStatusEl.textContent = `Connected (${payload.kind})`;
-      } else if (payload.kind === "status") {
-        transportNoteEl.textContent = payload.chat
-          ? "Chat available"
-          : "WebSocket connected. Encrypted chat is not implemented yet.";
-      }
-    } catch {
-      wsStatusEl.textContent = "Connected (unparsed frame)";
+  pairButtonEl.disabled = true;
+  pairingMessageEl.textContent = "Generating device keypair…";
+
+  try {
+    const keyPair = await generateDeviceKeyPair();
+    const publicKeyJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+
+    pairingMessageEl.textContent = "Submitting pairing request…";
+    const response = await fetch("api/pairing/complete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code, label, publicKeyJwk }),
+    });
+
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(body?.error || `HTTP ${response.status}`);
     }
-  });
 
-  ws.addEventListener("close", () => {
-    wsStatusEl.textContent = "Closed";
-  });
+    await saveDeviceKeyPair({ privateKey: keyPair.privateKey, publicKey: keyPair.publicKey });
+    await savePairedState({
+      deviceId: body.deviceId,
+      label,
+      protocolVersion: body.protocolVersion,
+      pathPrefix: body.pathPrefix,
+      serverPublicFingerprint: body.serverPublicFingerprint,
+      serverPublicKeyJwk: body.serverPublicKeyJwk,
+      devicePublicKeyJwk: publicKeyJwk,
+      pairedAt: new Date().toISOString(),
+      nextOutboundCounter: 1,
+      lastInboundCounter: 0,
+    });
 
-  ws.addEventListener("error", () => {
-    wsStatusEl.textContent = "Error";
+    pairingStatusEl.textContent = `Paired as ${body.deviceId}`;
+    pairingMessageEl.textContent = `Paired successfully. Server fingerprint: ${body.serverPublicFingerprint}`;
+    serverFingerprintEl.textContent = body.serverPublicFingerprint || info.serverPublicFingerprint || "Unavailable";
+  } catch (error) {
+    pairingMessageEl.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    pairButtonEl.disabled = false;
+  }
+}
+
+async function init() {
+  if (!supportsRequiredCrypto()) {
+    pairingMessageEl.textContent = "This browser is not supported. Use a current Chromium-based browser.";
+    pairButtonEl.disabled = true;
+    return;
+  }
+
+  const info = await loadServerInfo();
+  if (!info) {
+    pairButtonEl.disabled = true;
+    return;
+  }
+
+  await restorePairedState();
+  pairButtonEl.addEventListener("click", () => {
+    void pairDevice(info);
   });
 }
 
@@ -76,8 +146,4 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-loadServerInfo().then((info) => {
-  if (info) {
-    openWebSocket(info);
-  }
-});
+void init();

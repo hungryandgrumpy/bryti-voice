@@ -42,6 +42,11 @@ function loadFile(filePath: string): PairedDevicesFile {
   if (parsed.version !== 1 || !Array.isArray(parsed.devices)) {
     throw new Error("Invalid web_e2ee paired devices file");
   }
+  parsed.devices = parsed.devices.map((device) => ({
+    ...device,
+    lastInboundCounter: typeof device.lastInboundCounter === "number" ? device.lastInboundCounter : 0,
+    lastOutboundCounter: typeof device.lastOutboundCounter === "number" ? device.lastOutboundCounter : 0,
+  }));
   return parsed;
 }
 

@@ -3,6 +3,11 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertValidPairingCompleteRequest,
+  type PairingCompleteRequest,
+  type PairingCompleteResponse,
+} from "./protocol.js";
 import { matchesIndexPath, normalizePathPrefix, prefixedPath } from "./path-utils.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -11,6 +16,7 @@ const __dirname = path.dirname(__filename);
 const STATIC_FILES = new Map<string, { file: string; contentType: string }>([
   ["/index.html", { file: "index.html", contentType: "text/html; charset=utf-8" }],
   ["/app.js", { file: "app.js", contentType: "application/javascript; charset=utf-8" }],
+  ["/idb.js", { file: "idb.js", contentType: "application/javascript; charset=utf-8" }],
   ["/styles.css", { file: "styles.css", contentType: "text/css; charset=utf-8" }],
   ["/manifest.json", { file: "manifest.json", contentType: "application/manifest+json; charset=utf-8" }],
   ["/sw.js", { file: "sw.js", contentType: "application/javascript; charset=utf-8" }],
@@ -33,6 +39,7 @@ export interface WebE2EEHttpServerOptions {
   publicOrigin: string;
   pathPrefix: string;
   serverInfo: ServerInfoResponse;
+  completePairing?: (body: PairingCompleteRequest) => Promise<PairingCompleteResponse>;
 }
 
 function staticRoot(): string {
@@ -146,6 +153,11 @@ export class WebE2EEHttpServer {
       return;
     }
 
+    if (pathname === prefixedPath(this.pathPrefix, "/api/pairing/complete")) {
+      await this.handlePairingComplete(req, res, method);
+      return;
+    }
+
     if (method !== "GET") {
       this.respondJson(res, 405, { error: "method not allowed" });
       return;
@@ -179,6 +191,42 @@ export class WebE2EEHttpServer {
     this.serveStaticFile(res, relativePath);
   }
 
+  private async handlePairingComplete(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    method: string,
+  ): Promise<void> {
+    if (method !== "POST") {
+      this.respondJson(res, 405, { error: "method not allowed" });
+      return;
+    }
+    if (!this.options.completePairing) {
+      this.respondJson(res, 404, { error: "not found" });
+      return;
+    }
+
+    try {
+      const body = await this.readJsonBody(req);
+      const request = assertValidPairingCompleteRequest(body);
+      const result = await this.options.completePairing(request);
+      this.respondJson(res, 200, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        message.includes("required") ||
+        message.includes("Invalid") ||
+        message.includes("expired") ||
+        message.includes("used") ||
+        message.includes("exists") ||
+        message.includes("label")
+      ) {
+        this.respondJson(res, 400, { error: message });
+        return;
+      }
+      this.respondJson(res, 500, { error: "pairing failed" });
+    }
+  }
+
   private serveStaticFile(res: http.ServerResponse, requestPath: string): void {
     const entry = STATIC_FILES.get(requestPath);
     if (!entry) {
@@ -203,6 +251,24 @@ export class WebE2EEHttpServer {
   private applyHeaders(res: http.ServerResponse): void {
     for (const [key, value] of Object.entries(securityHeaders(this.options.publicOrigin))) {
       res.setHeader(key, value);
+    }
+  }
+
+  private async readJsonBody(req: http.IncomingMessage): Promise<unknown> {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of req) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buffer.length;
+      if (total > 32 * 1024) {
+        throw new Error("Invalid pairing request");
+      }
+      chunks.push(buffer);
+    }
+    try {
+      return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+    } catch {
+      throw new Error("Invalid pairing request");
     }
   }
 

@@ -2,8 +2,10 @@
 import { loadOrCreateServerKeyPair } from "../web-e2ee/server-key-store.js";
 import { createDeviceStore } from "../web-e2ee/device-store.js";
 import { createInviteStore } from "../web-e2ee/invite-store.js";
+import { assertValidPublicX25519Jwk, generateDeviceId, importPublicKeyJwk, fingerprintPublicKey } from "../web-e2ee/crypto.js";
 import { WebE2EEHttpServer } from "../web-e2ee/http-server.js";
 import { WebE2EEWsServer } from "../web-e2ee/ws-server.js";
+import type { PairingCompleteRequest } from "../web-e2ee/protocol.js";
 import type { ApprovalResult, ChannelBridge, IncomingMessage, SendOpts } from "./types.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
@@ -42,8 +44,8 @@ export class WebE2EEBridge implements ChannelBridge {
     }
 
     const serverKeys = await loadOrCreateServerKeyPair(this.dataDir);
-    createDeviceStore(this.dataDir);
-    createInviteStore(this.dataDir);
+    const deviceStore = createDeviceStore(this.dataDir);
+    const inviteStore = createInviteStore(this.dataDir);
 
     const httpServer = new WebE2EEHttpServer({
       listenHost: this.config.listen_host,
@@ -53,12 +55,43 @@ export class WebE2EEBridge implements ChannelBridge {
       serverInfo: {
         channel: "web_e2ee",
         protocolVersion: 1,
-        designVersion: "slice3-transport-shell",
+        designVersion: "slice4a-pairing",
         serverPublicFingerprint: serverKeys.fingerprint,
         pathPrefix: this.config.path_prefix,
         pairingEnabled: this.config.pairing.invite_ttl_minutes > 0,
         encryptedTransport: false,
         chatEnabled: false,
+      },
+      completePairing: async (request: PairingCompleteRequest) => {
+        assertValidPublicX25519Jwk(request.publicKeyJwk);
+        const publicKey = await importPublicKeyJwk(request.publicKeyJwk);
+        const publicKeyFingerprint = await fingerprintPublicKey(publicKey);
+        if (deviceStore.list().some((device) => device.publicKeyFingerprint === publicKeyFingerprint)) {
+          throw new Error(`Device public key already registered: ${publicKeyFingerprint}`);
+        }
+        const deviceId = generateDeviceId();
+
+        await inviteStore.consume(request.code, deviceId);
+        await deviceStore.add({
+          deviceId,
+          label: request.label,
+          publicKeyJwk: request.publicKeyJwk,
+          publicKeyFingerprint,
+          pairedAt: new Date().toISOString(),
+          lastSeenAt: null,
+          status: "active",
+          notes: "",
+          lastInboundCounter: 0,
+          lastOutboundCounter: 0,
+        });
+
+        return {
+          deviceId,
+          serverPublicKeyJwk: serverKeys.publicKeyJwk,
+          serverPublicFingerprint: serverKeys.fingerprint,
+          protocolVersion: 1,
+          pathPrefix: this.config.path_prefix,
+        };
       },
     });
 
