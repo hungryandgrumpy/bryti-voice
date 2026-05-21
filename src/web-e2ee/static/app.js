@@ -5,6 +5,10 @@ import {
   savePairedState,
 } from "./idb.js";
 
+const HKDF_CONTEXT_LABEL = new TextEncoder().encode("bryti/web_e2ee/v1");
+const HKDF_INFO_C2S = new TextEncoder().encode("bryti/web_e2ee/v1/c2s");
+const HKDF_INFO_S2C = new TextEncoder().encode("bryti/web_e2ee/v1/s2c");
+
 const httpStatusEl = document.getElementById("http-status");
 const wsStatusEl = document.getElementById("ws-status");
 const serverFingerprintEl = document.getElementById("server-fingerprint");
@@ -14,6 +18,18 @@ const pairingMessageEl = document.getElementById("pairing-message");
 const deviceLabelEl = document.getElementById("device-label");
 const inviteCodeEl = document.getElementById("invite-code");
 const pairButtonEl = document.getElementById("pair-button");
+const chatInputEl = document.getElementById("chat-input");
+const chatSendEl = document.getElementById("chat-send");
+
+const appState = {
+  serverInfo: null,
+  pairedState: null,
+  devicePrivateKey: null,
+  derivedKeys: null,
+  ws: null,
+  wsConnected: false,
+  sendingText: false,
+};
 
 function supportsRequiredCrypto() {
   return !!(
@@ -21,6 +37,144 @@ function supportsRequiredCrypto() {
     window.crypto?.subtle &&
     typeof CryptoKey !== "undefined"
   );
+}
+
+function updateChatAvailability() {
+  const enabled = !!(
+    appState.pairedState &&
+    appState.devicePrivateKey &&
+    appState.wsConnected &&
+    appState.derivedKeys &&
+    !appState.sendingText
+  );
+  chatInputEl.disabled = !enabled;
+  chatSendEl.disabled = !enabled;
+  chatInputEl.placeholder = enabled
+    ? "Send encrypted text to Bryti"
+    : "Pair and connect to enable encrypted outbound text";
+}
+
+function bytesToBase64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlToBytes(text) {
+  const padded = text.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(text.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function randomBase64Url(byteLength) {
+  return bytesToBase64Url(crypto.getRandomValues(new Uint8Array(byteLength)));
+}
+
+function concatBytes(...parts) {
+  const length = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const result = new Uint8Array(length);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.byteLength;
+  }
+  return result;
+}
+
+function canonicalHeader(frame) {
+  return JSON.stringify({
+    v: frame.v,
+    kind: frame.kind,
+    deviceId: frame.deviceId,
+    messageId: frame.messageId,
+    counter: frame.counter,
+    ts: frame.ts,
+    nonce: frame.nonce,
+  });
+}
+
+function webSocketUrl(pathPrefix) {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const prefix = !pathPrefix || pathPrefix === "/"
+    ? ""
+    : pathPrefix.endsWith("/") ? pathPrefix.slice(0, -1) : pathPrefix;
+  return `${protocol}//${window.location.host}${prefix}/ws`;
+}
+
+async function importServerPublicKey(jwk) {
+  return await crypto.subtle.importKey("jwk", jwk, { name: "X25519" }, true, []);
+}
+
+function publicKeyJwkToRawBytes(jwk) {
+  if (jwk?.kty !== "OKP" || jwk?.crv !== "X25519" || typeof jwk?.x !== "string") {
+    throw new Error("Invalid X25519 public JWK");
+  }
+  return base64UrlToBytes(jwk.x);
+}
+
+async function deriveKeyContextSalt(serverPublicKeyJwk, devicePublicKeyJwk) {
+  const context = concatBytes(
+    HKDF_CONTEXT_LABEL,
+    publicKeyJwkToRawBytes(serverPublicKeyJwk),
+    publicKeyJwkToRawBytes(devicePublicKeyJwk),
+  );
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", context));
+}
+
+async function deriveDirectionalKeys(devicePrivateKey, serverPublicKeyJwk, devicePublicKeyJwk) {
+  const serverPublicKey = await importServerPublicKey(serverPublicKeyJwk);
+  const secretBits = await crypto.subtle.deriveBits({ name: "X25519", public: serverPublicKey }, devicePrivateKey, 256);
+  const salt = await deriveKeyContextSalt(serverPublicKeyJwk, devicePublicKeyJwk);
+  const hkdfBaseKey = await crypto.subtle.importKey("raw", secretBits, "HKDF", false, ["deriveKey"]);
+  const [c2sKey, s2cKey] = await Promise.all([
+    crypto.subtle.deriveKey(
+      { name: "HKDF", hash: "SHA-256", salt, info: HKDF_INFO_C2S },
+      hkdfBaseKey,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"],
+    ),
+    crypto.subtle.deriveKey(
+      { name: "HKDF", hash: "SHA-256", salt, info: HKDF_INFO_S2C },
+      hkdfBaseKey,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"],
+    ),
+  ]);
+  return { c2sKey, s2cKey };
+}
+
+async function encryptTextFrame(c2sKey, pairedState, text) {
+  const frame = {
+    v: 1,
+    kind: "msg",
+    deviceId: pairedState.deviceId,
+    messageId: `msg_${randomBase64Url(12)}`,
+    counter: pairedState.nextOutboundCounter,
+    ts: new Date().toISOString(),
+    nonce: randomBase64Url(12),
+  };
+  const plaintextBytes = new TextEncoder().encode(JSON.stringify({ kind: "text", text }));
+  const ciphertext = await crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv: base64UrlToBytes(frame.nonce),
+      additionalData: new TextEncoder().encode(canonicalHeader(frame)),
+    },
+    c2sKey,
+    plaintextBytes,
+  );
+  return {
+    ...frame,
+    ciphertext: bytesToBase64Url(new Uint8Array(ciphertext)),
+  };
 }
 
 async function loadServerInfo() {
@@ -33,6 +187,7 @@ async function loadServerInfo() {
     httpStatusEl.textContent = "Connected";
     serverFingerprintEl.textContent = info.serverPublicFingerprint || "Unavailable";
     protocolVersionEl.textContent = `v${info.protocolVersion} (${info.designVersion})`;
+    appState.serverInfo = info;
     return info;
   } catch (error) {
     httpStatusEl.textContent = "Failed";
@@ -51,6 +206,9 @@ async function restorePairedState() {
     return null;
   }
 
+  appState.pairedState = state;
+  appState.devicePrivateKey = privateKey;
+  appState.derivedKeys = await deriveDirectionalKeys(privateKey, state.serverPublicKeyJwk, state.devicePublicKeyJwk);
   pairingStatusEl.textContent = `Paired as ${state.deviceId}`;
   pairingMessageEl.textContent = `Stored server fingerprint: ${state.serverPublicFingerprint}`;
   if (state.label) {
@@ -63,6 +221,52 @@ async function generateDeviceKeyPair() {
   // Chromium WebCrypto allows exporting the generated public key JWK while
   // keeping the private key non-extractable, which is the desired v1 behavior.
   return await crypto.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"]);
+}
+
+function connectWebSocket(pathPrefix) {
+  if (!appState.pairedState) {
+    return;
+  }
+  if (appState.ws) {
+    appState.ws.close();
+  }
+
+  const ws = new WebSocket(webSocketUrl(pathPrefix));
+  appState.ws = ws;
+  wsStatusEl.textContent = "Connecting";
+  appState.wsConnected = false;
+  updateChatAvailability();
+
+  ws.addEventListener("open", () => {
+    appState.wsConnected = true;
+    wsStatusEl.textContent = "Connected";
+    updateChatAvailability();
+  });
+
+  ws.addEventListener("message", (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload.kind === "hello") {
+        wsStatusEl.textContent = "Connected";
+      } else if (payload.kind === "error") {
+        pairingMessageEl.textContent = `Transport error: ${payload.code}`;
+      }
+    } catch {
+      wsStatusEl.textContent = "Connected";
+    }
+  });
+
+  ws.addEventListener("close", () => {
+    appState.wsConnected = false;
+    wsStatusEl.textContent = "Closed";
+    updateChatAvailability();
+  });
+
+  ws.addEventListener("error", () => {
+    appState.wsConnected = false;
+    wsStatusEl.textContent = "Error";
+    updateChatAvailability();
+  });
 }
 
 async function pairDevice(info) {
@@ -98,7 +302,7 @@ async function pairDevice(info) {
     }
 
     await saveDeviceKeyPair({ privateKey: keyPair.privateKey, publicKey: keyPair.publicKey });
-    await savePairedState({
+    const pairedState = {
       deviceId: body.deviceId,
       label,
       protocolVersion: body.protocolVersion,
@@ -109,15 +313,72 @@ async function pairDevice(info) {
       pairedAt: new Date().toISOString(),
       nextOutboundCounter: 1,
       lastInboundCounter: 0,
-    });
+    };
+    await savePairedState(pairedState);
+
+    appState.pairedState = pairedState;
+    appState.devicePrivateKey = keyPair.privateKey;
+    appState.derivedKeys = await deriveDirectionalKeys(keyPair.privateKey, body.serverPublicKeyJwk, publicKeyJwk);
 
     pairingStatusEl.textContent = `Paired as ${body.deviceId}`;
     pairingMessageEl.textContent = `Paired successfully. Server fingerprint: ${body.serverPublicFingerprint}`;
     serverFingerprintEl.textContent = body.serverPublicFingerprint || info.serverPublicFingerprint || "Unavailable";
+    connectWebSocket(body.pathPrefix || info.pathPrefix);
   } catch (error) {
     pairingMessageEl.textContent = error instanceof Error ? error.message : String(error);
   } finally {
     pairButtonEl.disabled = false;
+    updateChatAvailability();
+  }
+}
+
+async function sendEncryptedText() {
+  if (appState.sendingText) {
+    return;
+  }
+  if (!appState.pairedState || !appState.devicePrivateKey || !appState.derivedKeys || !appState.ws || !appState.wsConnected) {
+    pairingMessageEl.textContent = "Pair and connect before sending encrypted text.";
+    return;
+  }
+
+  const text = chatInputEl.value;
+  if (!text.trim()) {
+    pairingMessageEl.textContent = "Message text is required.";
+    return;
+  }
+
+  appState.sendingText = true;
+  updateChatAvailability();
+
+  try {
+    const currentState = await loadPairedState();
+    if (!currentState) {
+      pairingMessageEl.textContent = "Paired state not found.";
+      return;
+    }
+
+    const currentCounter = Number.isInteger(currentState.nextOutboundCounter)
+      ? currentState.nextOutboundCounter
+      : 1;
+    const reservedState = {
+      ...currentState,
+      nextOutboundCounter: currentCounter + 1,
+    };
+    await savePairedState(reservedState);
+    appState.pairedState = reservedState;
+
+    const frame = await encryptTextFrame(appState.derivedKeys.c2sKey, {
+      ...currentState,
+      nextOutboundCounter: currentCounter,
+    }, text);
+    appState.ws.send(JSON.stringify(frame));
+    chatInputEl.value = "";
+    pairingMessageEl.textContent = "Encrypted message sent. Assistant replies are not implemented until Slice 4c.";
+  } catch (error) {
+    pairingMessageEl.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    appState.sendingText = false;
+    updateChatAvailability();
   }
 }
 
@@ -134,9 +395,23 @@ async function init() {
     return;
   }
 
-  await restorePairedState();
+  const restored = await restorePairedState();
+  if (restored) {
+    connectWebSocket(restored.pathPrefix || info.pathPrefix);
+  }
+  updateChatAvailability();
+
   pairButtonEl.addEventListener("click", () => {
     void pairDevice(info);
+  });
+  chatSendEl.addEventListener("click", () => {
+    void sendEncryptedText();
+  });
+  chatInputEl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !chatSendEl.disabled) {
+      event.preventDefault();
+      void sendEncryptedText();
+    }
   });
 }
 

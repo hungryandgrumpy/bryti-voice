@@ -53,8 +53,10 @@ function loadFile(filePath: string): PairedDevicesFile {
 export interface DeviceStore {
   list(): PairedDeviceRecord[];
   get(deviceId: string): PairedDeviceRecord | undefined;
+  getActive(deviceId: string): PairedDeviceRecord | undefined;
   add(record: PairedDeviceRecord): Promise<void>;
   markSeen(deviceId: string, at?: string): void;
+  updateLastInboundCounter(deviceId: string, counter: number, seenAt?: string): void;
 }
 
 export function createDeviceStore(dataDir: string): DeviceStore {
@@ -68,6 +70,10 @@ export function createDeviceStore(dataDir: string): DeviceStore {
 
     get(deviceId: string): PairedDeviceRecord | undefined {
       return loadFile(filePath).devices.find((d) => d.deviceId === deviceId);
+    },
+
+    getActive(deviceId: string): PairedDeviceRecord | undefined {
+      return loadFile(filePath).devices.find((d) => d.deviceId === deviceId && d.status === "active");
     },
 
     async add(record: PairedDeviceRecord): Promise<void> {
@@ -94,6 +100,17 @@ export function createDeviceStore(dataDir: string): DeviceStore {
         throw new Error(`Unknown device: ${deviceId}`);
       }
       device.lastSeenAt = at;
+      saveFile(filePath, file);
+    },
+
+    updateLastInboundCounter(deviceId: string, counter: number, seenAt = new Date().toISOString()): void {
+      const file = loadFile(filePath);
+      const device = file.devices.find((d) => d.deviceId === deviceId);
+      if (!device) {
+        throw new Error(`Unknown device: ${deviceId}`);
+      }
+      device.lastInboundCounter = counter;
+      device.lastSeenAt = seenAt;
       saveFile(filePath, file);
     },
   };

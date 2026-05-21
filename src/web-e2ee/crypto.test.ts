@@ -1,17 +1,23 @@
 import { describe, it, expect } from "vitest";
 import {
   assertValidPublicX25519Jwk,
+  decryptPayload,
+  deriveDirectionalAesKeys,
+  deriveKeyContextSalt,
+  encryptPayload,
   exportPrivateKeyJwk,
   exportPublicKeyJwk,
   exportRawPublicKey,
   fingerprintPublicKey,
   generateDeviceId,
   generateInviteCode,
+  generateMessageNonce,
   generateX25519KeyPair,
   hashInviteCode,
   importPrivateKeyJwk,
   importPublicKeyJwk,
 } from "./crypto.js";
+import { bytesToBase64Url } from "./encoding.js";
 
 describe("web-e2ee crypto", () => {
   it("round-trips X25519 JWK export/import", async () => {
@@ -66,6 +72,117 @@ describe("web-e2ee crypto", () => {
     expect(() => assertValidPublicX25519Jwk(publicJwk)).not.toThrow();
     expect(() => assertValidPublicX25519Jwk({ kty: "EC", crv: "P-256", x: "abc" })).toThrow(
       "Invalid X25519 public JWK",
+    );
+  });
+
+  it("derives directional AES keys and encrypts/decrypts with canonical aad", async () => {
+    const serverPair = await generateX25519KeyPair();
+    const devicePair = await generateX25519KeyPair();
+    const serverPublicRaw = await exportRawPublicKey(serverPair.publicKey);
+    const devicePublicRaw = await exportRawPublicKey(devicePair.publicKey);
+    const deviceKeys = await deriveDirectionalAesKeys(
+      devicePair.privateKey,
+      serverPair.publicKey,
+      serverPublicRaw,
+      devicePublicRaw,
+    );
+    const serverKeys = await deriveDirectionalAesKeys(
+      serverPair.privateKey,
+      devicePair.publicKey,
+      serverPublicRaw,
+      devicePublicRaw,
+    );
+    const header = {
+      v: 1 as const,
+      kind: "msg" as const,
+      deviceId: "wed_123",
+      messageId: "msg_123",
+      counter: 1,
+      ts: "2026-01-01T00:00:00.000Z",
+      nonce: bytesToBase64Url(generateMessageNonce()),
+    };
+
+    expect(deviceKeys.c2sKey).not.toBe(deviceKeys.s2cKey);
+
+    const ciphertext = await encryptPayload(deviceKeys.c2sKey, header, { kind: "text", text: "hello" });
+    const payload = await decryptPayload(serverKeys.c2sKey, header, ciphertext);
+
+    expect(payload).toEqual({ kind: "text", text: "hello" });
+  });
+
+  it("binds HKDF context to both public keys", async () => {
+    const serverPair = await generateX25519KeyPair();
+    const devicePair = await generateX25519KeyPair();
+    const otherDevicePair = await generateX25519KeyPair();
+    const serverPublicRaw = await exportRawPublicKey(serverPair.publicKey);
+    const devicePublicRaw = await exportRawPublicKey(devicePair.publicKey);
+    const otherDevicePublicRaw = await exportRawPublicKey(otherDevicePair.publicKey);
+
+    const expectedSalt = await deriveKeyContextSalt(serverPublicRaw, devicePublicRaw);
+    const swappedSalt = await deriveKeyContextSalt(devicePublicRaw, serverPublicRaw);
+    const otherDeviceSalt = await deriveKeyContextSalt(serverPublicRaw, otherDevicePublicRaw);
+
+    expect(bytesToBase64Url(expectedSalt)).not.toBe(bytesToBase64Url(swappedSalt));
+    expect(bytesToBase64Url(expectedSalt)).not.toBe(bytesToBase64Url(otherDeviceSalt));
+
+    const deviceKeys = await deriveDirectionalAesKeys(
+      devicePair.privateKey,
+      serverPair.publicKey,
+      serverPublicRaw,
+      devicePublicRaw,
+    );
+    const wrongServerKeys = await deriveDirectionalAesKeys(
+      serverPair.privateKey,
+      devicePair.publicKey,
+      devicePublicRaw,
+      serverPublicRaw,
+    );
+    const header = {
+      v: 1 as const,
+      kind: "msg" as const,
+      deviceId: "wed_123",
+      messageId: "msg_123",
+      counter: 1,
+      ts: "2026-01-01T00:00:00.000Z",
+      nonce: bytesToBase64Url(generateMessageNonce()),
+    };
+    const ciphertext = await encryptPayload(deviceKeys.c2sKey, header, { kind: "text", text: "hello" });
+
+    await expect(decryptPayload(wrongServerKeys.c2sKey, header, ciphertext)).rejects.toThrow(
+      "Failed to decrypt encrypted payload",
+    );
+  });
+
+  it("fails to decrypt when aad header changes", async () => {
+    const serverPair = await generateX25519KeyPair();
+    const devicePair = await generateX25519KeyPair();
+    const serverPublicRaw = await exportRawPublicKey(serverPair.publicKey);
+    const devicePublicRaw = await exportRawPublicKey(devicePair.publicKey);
+    const deviceKeys = await deriveDirectionalAesKeys(
+      devicePair.privateKey,
+      serverPair.publicKey,
+      serverPublicRaw,
+      devicePublicRaw,
+    );
+    const serverKeys = await deriveDirectionalAesKeys(
+      serverPair.privateKey,
+      devicePair.publicKey,
+      serverPublicRaw,
+      devicePublicRaw,
+    );
+    const header = {
+      v: 1 as const,
+      kind: "msg" as const,
+      deviceId: "wed_123",
+      messageId: "msg_123",
+      counter: 1,
+      ts: "2026-01-01T00:00:00.000Z",
+      nonce: bytesToBase64Url(generateMessageNonce()),
+    };
+    const ciphertext = await encryptPayload(deviceKeys.c2sKey, header, { kind: "text", text: "hello" });
+
+    await expect(decryptPayload(serverKeys.c2sKey, { ...header, counter: 2 }, ciphertext)).rejects.toThrow(
+      "Failed to decrypt encrypted payload",
     );
   });
 });

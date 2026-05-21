@@ -55,7 +55,7 @@ export class WebE2EEBridge implements ChannelBridge {
       serverInfo: {
         channel: "web_e2ee",
         protocolVersion: 1,
-        designVersion: "slice4a-pairing",
+        designVersion: "slice4b-encrypted-inbound",
         serverPublicFingerprint: serverKeys.fingerprint,
         pathPrefix: this.config.path_prefix,
         pairingEnabled: this.config.pairing.invite_ttl_minutes > 0,
@@ -102,6 +102,20 @@ export class WebE2EEBridge implements ChannelBridge {
       wsServer = new WebE2EEWsServer(httpServer.getHttpServer(), {
         pathPrefix: this.config.path_prefix,
         allowedOrigins: this.config.allowed_origins,
+        deviceStore,
+        serverKeys,
+        onDecryptedMessage: async (event) => {
+          if (!this.handler) {
+            return;
+          }
+          await this.handler({
+            channelId: event.deviceId,
+            userId: event.deviceId,
+            text: event.payload.text,
+            platform: "web_e2ee",
+            raw: event.raw,
+          });
+        },
       });
     } catch (error) {
       await httpServer.stop();

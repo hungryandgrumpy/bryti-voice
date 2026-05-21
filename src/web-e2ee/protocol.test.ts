@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { assertValidPairingCompleteRequest, sanitizeDeviceLabel } from "./protocol.js";
+import {
+  assertValidEncryptedMessageFrame,
+  assertValidEncryptedTextPayload,
+  assertValidPairingCompleteRequest,
+  canonicalFrameHeaderJson,
+  sanitizeDeviceLabel,
+} from "./protocol.js";
 
 describe("web-e2ee protocol", () => {
   it("accepts a valid pairing request", () => {
@@ -25,6 +31,54 @@ describe("web-e2ee protocol", () => {
     expect(() => sanitizeDeviceLabel("   ")).toThrow("Device label is required");
     expect(() => sanitizeDeviceLabel("x".repeat(121))).toThrow(
       "Device label must be 120 characters or fewer",
+    );
+  });
+
+  it("canonical aad field order includes nonce and excludes ciphertext", () => {
+    const json = canonicalFrameHeaderJson({
+      v: 1,
+      kind: "msg",
+      deviceId: "wed_123",
+      messageId: "msg_123",
+      counter: 7,
+      ts: "2026-01-01T00:00:00.000Z",
+      nonce: "nonce123",
+      ciphertext: "secret",
+    });
+
+    expect(json).toBe(
+      JSON.stringify({
+        v: 1,
+        kind: "msg",
+        deviceId: "wed_123",
+        messageId: "msg_123",
+        counter: 7,
+        ts: "2026-01-01T00:00:00.000Z",
+        nonce: "nonce123",
+      }),
+    );
+    expect(json).not.toContain("ciphertext");
+  });
+
+  it("accepts encrypted msg frames and text payloads", () => {
+    expect(assertValidEncryptedMessageFrame({
+      v: 1,
+      kind: "msg",
+      deviceId: "wed_123",
+      messageId: "msg_123",
+      counter: 1,
+      ts: "2026-01-01T00:00:00.000Z",
+      nonce: "abc",
+      ciphertext: "def",
+    }).messageId).toBe("msg_123");
+
+    expect(assertValidEncryptedTextPayload({ kind: "text", text: "hello" }).text).toBe("hello");
+  });
+
+  it("rejects malformed encrypted frames and invalid payloads", () => {
+    expect(() => assertValidEncryptedMessageFrame({ kind: "msg" })).toThrow("Invalid encrypted frame version");
+    expect(() => assertValidEncryptedTextPayload({ kind: "text", text: "   " })).toThrow(
+      "Encrypted text payload is empty",
     );
   });
 });

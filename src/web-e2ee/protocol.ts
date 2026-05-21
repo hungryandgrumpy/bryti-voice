@@ -1,3 +1,8 @@
+import { utf8ToBytes } from "./encoding.js";
+
+export const WEB_E2EE_PROTOCOL_VERSION = 1 as const;
+export const WEB_E2EE_MAX_TEXT_LENGTH = 10_000;
+
 export interface PairingCompleteRequest {
   code: string;
   label: string;
@@ -10,6 +15,50 @@ export interface PairingCompleteResponse {
   serverPublicFingerprint: string;
   protocolVersion: 1;
   pathPrefix: string;
+}
+
+export interface EncryptedMessageFrame {
+  v: 1;
+  kind: "msg";
+  deviceId: string;
+  messageId: string;
+  counter: number;
+  ts: string;
+  nonce: string;
+  ciphertext: string;
+}
+
+export interface CanonicalFrameHeader {
+  v: 1;
+  kind: "msg";
+  deviceId: string;
+  messageId: string;
+  counter: number;
+  ts: string;
+  nonce: string;
+}
+
+export interface EncryptedTextPayload {
+  kind: "text";
+  text: string;
+}
+
+export interface DecryptedTextMessageEvent {
+  deviceId: string;
+  messageId: string;
+  counter: number;
+  ts: string;
+  payload: EncryptedTextPayload;
+  raw: {
+    type: "web_e2ee_encrypted_msg";
+    deviceId: string;
+    messageId: string;
+    counter: number;
+    ts: string;
+    kind: "msg";
+    nonceLength: number;
+    ciphertextLength: number;
+  };
 }
 
 export function sanitizeDeviceLabel(label: string): string {
@@ -43,4 +92,95 @@ export function assertValidPairingCompleteRequest(value: unknown): PairingComple
     label: sanitizeDeviceLabel(raw.label),
     publicKeyJwk: raw.publicKeyJwk as JsonWebKey,
   };
+}
+
+export function assertValidEncryptedMessageFrame(value: unknown): EncryptedMessageFrame {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid encrypted frame");
+  }
+  const raw = value as Record<string, unknown>;
+  if (raw.v !== WEB_E2EE_PROTOCOL_VERSION) {
+    throw new Error("Invalid encrypted frame version");
+  }
+  if (raw.kind !== "msg") {
+    throw new Error("Invalid encrypted frame kind");
+  }
+  if (typeof raw.deviceId !== "string" || !raw.deviceId) {
+    throw new Error("Invalid encrypted frame deviceId");
+  }
+  if (typeof raw.messageId !== "string" || !raw.messageId) {
+    throw new Error("Invalid encrypted frame messageId");
+  }
+  if (typeof raw.counter !== "number" || !Number.isInteger(raw.counter) || raw.counter <= 0) {
+    throw new Error("Invalid encrypted frame counter");
+  }
+  if (typeof raw.ts !== "string" || !raw.ts) {
+    throw new Error("Invalid encrypted frame ts");
+  }
+  if (typeof raw.nonce !== "string" || !raw.nonce) {
+    throw new Error("Invalid encrypted frame nonce");
+  }
+  if (typeof raw.ciphertext !== "string" || !raw.ciphertext) {
+    throw new Error("Invalid encrypted frame ciphertext");
+  }
+  return {
+    v: WEB_E2EE_PROTOCOL_VERSION,
+    kind: "msg",
+    deviceId: raw.deviceId,
+    messageId: raw.messageId,
+    counter: raw.counter,
+    ts: raw.ts,
+    nonce: raw.nonce,
+    ciphertext: raw.ciphertext,
+  };
+}
+
+export function canonicalFrameHeader(frame: EncryptedMessageFrame | CanonicalFrameHeader): CanonicalFrameHeader {
+  return {
+    v: WEB_E2EE_PROTOCOL_VERSION,
+    kind: "msg",
+    deviceId: frame.deviceId,
+    messageId: frame.messageId,
+    counter: frame.counter,
+    ts: frame.ts,
+    nonce: frame.nonce,
+  };
+}
+
+export function canonicalFrameHeaderJson(frame: EncryptedMessageFrame | CanonicalFrameHeader): string {
+  const header = canonicalFrameHeader(frame);
+  return JSON.stringify({
+    v: header.v,
+    kind: header.kind,
+    deviceId: header.deviceId,
+    messageId: header.messageId,
+    counter: header.counter,
+    ts: header.ts,
+    nonce: header.nonce,
+  });
+}
+
+export function canonicalFrameHeaderBytes(frame: EncryptedMessageFrame | CanonicalFrameHeader): Uint8Array {
+  return utf8ToBytes(canonicalFrameHeaderJson(frame));
+}
+
+export function assertValidEncryptedTextPayload(value: unknown): EncryptedTextPayload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid encrypted payload");
+  }
+  const raw = value as Record<string, unknown>;
+  if (raw.kind !== "text") {
+    throw new Error("Invalid encrypted payload kind");
+  }
+  if (typeof raw.text !== "string") {
+    throw new Error("Invalid encrypted payload text");
+  }
+  const text = raw.text.trim();
+  if (!text) {
+    throw new Error("Encrypted text payload is empty");
+  }
+  if (text.length > WEB_E2EE_MAX_TEXT_LENGTH) {
+    throw new Error(`Encrypted text payload exceeds ${WEB_E2EE_MAX_TEXT_LENGTH} characters`);
+  }
+  return { kind: "text", text: raw.text };
 }

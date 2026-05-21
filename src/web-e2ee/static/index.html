@@ -11,7 +11,7 @@
   <body>
     <main class="app">
       <h1>Bryti web_e2ee</h1>
-      <p class="lede">Slice 4a: pairing only. Encrypted chat is not implemented yet.</p>
+      <p class="lede">Slice 4b: encrypted inbound text only. Assistant replies are not implemented yet.</p>
 
       <section class="card">
         <h2>Status</h2>
@@ -22,7 +22,7 @@
           </div>
           <div>
             <dt>WebSocket</dt>
-            <dd id="ws-status">Disabled in this slice</dd>
+            <dd id="ws-status">Disconnected</dd>
           </div>
           <div>
             <dt>Server fingerprint</dt>
@@ -56,7 +56,7 @@
 
       <section class="card muted">
         <h2>Chat</h2>
-        <input id="chat-input" type="text" placeholder="Encrypted chat not implemented yet" disabled>
+        <input id="chat-input" type="text" placeholder="Pair and connect to enable encrypted outbound text" disabled>
         <button id="chat-send" type="button" disabled>Send</button>
       </section>
     </main>
