@@ -64,8 +64,20 @@ const { version: BRYTI_VERSION } = _require("../package.json") as { version: str
 // AppState, processMessage, getOrLoadSession, getBridge, triggerRestart
 // are imported from ./process-message.ts
 
-
-
+export function formatQueueFullLog(msg: IncomingMessage): unknown[] {
+  if (msg.platform === "web_e2ee") {
+    return [
+      "Queue full, rejecting web_e2ee message:",
+      {
+        platform: msg.platform,
+        channelId: msg.channelId,
+        userId: msg.userId,
+        textLength: msg.text.length,
+      },
+    ];
+  }
+  return ["Queue full, rejecting message:", msg.text];
+}
 
 /**
  * Start one app instance.
@@ -151,7 +163,7 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
   const queue = new MessageQueue(
     (msg) => processMessage(state, msg),
     async (msg) => {
-      console.log("Queue full, rejecting message:", msg.text);
+      console.log(...formatQueueFullLog(msg));
       const bridge = getBridge(state, msg.platform);
       await bridge.sendMessage(
         msg.channelId,

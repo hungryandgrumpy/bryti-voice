@@ -267,6 +267,29 @@ cron: []
     expect(config.agent.system_prompt).toContain("${tempC}");
   });
 
+  it("should derive web_e2ee.allowed_origins from public_origin when omitted", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+web_e2ee:
+  enabled: true
+  public_origin: https://dragon.example.ts.net
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    const config = loadConfig();
+    expect(config.web_e2ee.public_origin).toBe("https://dragon.example.ts.net");
+    expect(config.web_e2ee.allowed_origins).toEqual(["https://dragon.example.ts.net"]);
+  });
+
   it("should parse explicit web_e2ee config", () => {
     const configContent = `
 agent:

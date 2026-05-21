@@ -73,7 +73,7 @@ export class WebE2EEWsServer {
       }
 
       const origin = req.headers.origin;
-      if (origin && !this.allowedOrigins.has(origin)) {
+      if (typeof origin !== "string" || !this.allowedOrigins.has(origin)) {
         socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
         socket.destroy();
         return;

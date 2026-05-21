@@ -61,6 +61,9 @@ function securityHeaders(publicOrigin: string): Record<string, string> {
   return {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
     "Content-Security-Policy": [
       "default-src 'self'",
       "base-uri 'none'",
@@ -84,6 +87,39 @@ function hasTraversalAttempt(pathname: string): boolean {
   } catch {
     return true;
   }
+}
+
+function mapPairingError(error: unknown): { statusCode: number; message: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+
+  if (
+    lower.includes("invalid pairing request") ||
+    lower.includes("required") ||
+    lower.includes("invalid x25519") ||
+    lower.includes("publickeyjwk") ||
+    lower.includes("label")
+  ) {
+    return { statusCode: 400, message: "invalid pairing request" };
+  }
+
+  if (
+    lower.includes("invalid pairing invite code") ||
+    lower.includes("pairing invite has expired") ||
+    lower.includes("pairing invite has already been used")
+  ) {
+    return { statusCode: 400, message: "invalid or expired invite" };
+  }
+
+  if (
+    lower.includes("already registered") ||
+    lower.includes("device already exists") ||
+    lower.includes("device already paired")
+  ) {
+    return { statusCode: 400, message: "device already paired" };
+  }
+
+  return { statusCode: 500, message: "pairing failed" };
 }
 
 export class WebE2EEHttpServer {
@@ -211,19 +247,8 @@ export class WebE2EEHttpServer {
       const result = await this.options.completePairing(request);
       this.respondJson(res, 200, result);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (
-        message.includes("required") ||
-        message.includes("Invalid") ||
-        message.includes("expired") ||
-        message.includes("used") ||
-        message.includes("exists") ||
-        message.includes("label")
-      ) {
-        this.respondJson(res, 400, { error: message });
-        return;
-      }
-      this.respondJson(res, 500, { error: "pairing failed" });
+      const mapped = mapPairingError(error);
+      this.respondJson(res, mapped.statusCode, { error: mapped.message });
     }
   }
 

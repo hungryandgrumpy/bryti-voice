@@ -68,9 +68,11 @@ async function registerDevice(deviceStore: ReturnType<typeof createDeviceStore>,
   return { devicePair, publicKeyJwk };
 }
 
-async function connectWebSocket(url: string, origin: string): Promise<WebSocket> {
+async function connectWebSocket(url: string, origin?: string): Promise<WebSocket> {
   return await new Promise<WebSocket>((resolve, reject) => {
-    const ws = new WebSocket(url, { headers: { Origin: origin } });
+    const ws = origin
+      ? new WebSocket(url, { headers: { Origin: origin } })
+      : new WebSocket(url);
     ws.once("open", () => resolve(ws));
     ws.once("error", reject);
   });
@@ -181,6 +183,16 @@ describe("WebE2EEWsServer", () => {
     const ws = await connectWebSocket(`${created.httpServer.getBaseUrl().replace("http", "ws")}/ws`, "https://chat.example.test");
     ws.close();
     expect(ws.readyState).not.toBe(WebSocket.CLOSED);
+  });
+
+  it("rejects a missing origin", async () => {
+    const created = await createServers("/");
+    tempDirs.push(created.tempDir);
+    servers.push(created);
+
+    await expect(connectWebSocket(
+      `${created.httpServer.getBaseUrl().replace("http", "ws")}/ws`,
+    )).rejects.toThrow();
   });
 
   it("rejects a disallowed origin", async () => {

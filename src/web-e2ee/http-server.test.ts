@@ -91,6 +91,9 @@ describe("WebE2EEHttpServer", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/html");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("cross-origin-opener-policy")).toBe("same-origin");
+    expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+    expect(response.headers.get("permissions-policy")).toBe("camera=(), microphone=(), geolocation=()");
     expect(body).toContain("Bryti web_e2ee");
   });
 
@@ -190,7 +193,7 @@ describe("WebE2EEHttpServer", () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.text()).toContain("Invalid pairing invite code");
+    expect(await response.text()).toContain("invalid or expired invite");
   });
 
   it("POST pairing complete rejects expired or reused invite codes", async () => {
@@ -209,7 +212,7 @@ describe("WebE2EEHttpServer", () => {
     });
 
     expect(reused.status).toBe(400);
-    expect(await reused.text()).toContain("already been used");
+    expect(await reused.text()).toContain("invalid or expired invite");
   });
 
   it("POST pairing complete rejects malformed public key jwk", async () => {
@@ -229,7 +232,36 @@ describe("WebE2EEHttpServer", () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.text()).toContain("Invalid X25519 public JWK");
+    expect(await response.text()).toContain("invalid pairing request");
+  });
+
+  it("POST pairing complete sanitizes duplicate-key/internal pairing errors", async () => {
+    const created = await createServer("/");
+    tempDirs.push(created.tempDir);
+    servers.push(created.server);
+    const invite1 = await created.inviteStore.create(10);
+    const invite2 = await created.inviteStore.create(10);
+    const pair = await generateX25519KeyPair();
+    const publicKeyJwk = await exportPublicKeyJwk(pair.publicKey);
+
+    const first = await fetch(`${created.server.getBaseUrl()}/api/pairing/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: invite1.code, label: "June Chromium", publicKeyJwk }),
+    });
+    expect(first.status).toBe(200);
+
+    const second = await fetch(`${created.server.getBaseUrl()}/api/pairing/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: invite2.code, label: "June Chromium", publicKeyJwk }),
+    });
+    const body = await second.text();
+
+    expect(second.status).toBe(400);
+    expect(body).toContain("device already paired");
+    expect(body).not.toContain("sha256:");
+    expect(body).not.toContain("already registered");
   });
 
   it("server-info reports encrypted text roundtrip availability", async () => {

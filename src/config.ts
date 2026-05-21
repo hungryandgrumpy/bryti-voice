@@ -400,9 +400,10 @@ export function applyIntegrationEnvVars(config: Config): void {
 function webE2EEFromConfig(substituted: Record<string, unknown>): WebE2EEConfig {
   const raw = (substituted.web_e2ee ?? {}) as Record<string, unknown>;
   const pairingRaw = (raw.pairing ?? {}) as Record<string, unknown>;
+  const publicOrigin = typeof raw.public_origin === "string" ? raw.public_origin : "https://bryti.tailnet.ts.net";
 
   const allowedOrigins = raw.allowed_origins === undefined
-    ? ["https://bryti.tailnet.ts.net"]
+    ? [publicOrigin]
     : Array.isArray(raw.allowed_origins) && raw.allowed_origins.every((v) => typeof v === "string")
       ? raw.allowed_origins
       : [];
@@ -411,7 +412,7 @@ function webE2EEFromConfig(substituted: Record<string, unknown>): WebE2EEConfig 
     enabled: raw.enabled === true,
     listen_host: typeof raw.listen_host === "string" ? raw.listen_host : "127.0.0.1",
     listen_port: toFiniteNumber(raw.listen_port) ?? 8787,
-    public_origin: typeof raw.public_origin === "string" ? raw.public_origin : "https://bryti.tailnet.ts.net",
+    public_origin: publicOrigin,
     allowed_origins: allowedOrigins,
     path_prefix: typeof raw.path_prefix === "string" ? raw.path_prefix : "/",
     pairing: {
