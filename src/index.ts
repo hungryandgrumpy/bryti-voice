@@ -122,7 +122,7 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
   }
 
   if (config.web_e2ee.enabled) {
-    const webE2EE = new WebE2EEBridge(config.web_e2ee);
+    const webE2EE = new WebE2EEBridge(config.data_dir, config.web_e2ee);
     bridges.push(webE2EE);
   }
 

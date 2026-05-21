@@ -1,12 +1,24 @@
 // src/channels/web_e2ee.test.ts 
 
-import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { WebE2EEBridge } from "./web_e2ee.js";
 import type { ChannelBridge, Platform } from "./types.js";
 
 describe("WebE2EEBridge", () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync("/tmp/bryti-web-e2ee-bridge-");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
   function makeBridge(): ChannelBridge {
-    return new WebE2EEBridge({
+    return new WebE2EEBridge(tempDir, {
       listen_host: "127.0.0.1",
       listen_port: 8787,
       public_origin: "https://bryti.tailnet.ts.net",
@@ -28,6 +40,7 @@ describe("WebE2EEBridge", () => {
     const bridge = makeBridge();
 
     await expect(bridge.start()).resolves.toBeUndefined();
+    expect(fs.existsSync(path.join(tempDir, "web-e2ee", "server-key.jwk.json"))).toBe(true);
     await expect(bridge.stop()).resolves.toBeUndefined();
   });
 
