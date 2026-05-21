@@ -78,6 +78,17 @@ cron: []
 
     expect(config.tools.web_search.enabled).toBe(true);
     expect(config.tools.fetch_url.timeout_ms).toBe(10000);
+    expect(config.web_e2ee).toEqual({
+      enabled: false,
+      listen_host: "127.0.0.1",
+      listen_port: 8787,
+      public_origin: "https://bryti.tailnet.ts.net",
+      allowed_origins: ["https://bryti.tailnet.ts.net"],
+      path_prefix: "/",
+      pairing: {
+        invite_ttl_minutes: 10,
+      },
+    });
   });
 
   it("should create data directories", () => {
@@ -254,6 +265,137 @@ cron: []
     const config = loadConfig();
     expect(config.agent.system_prompt).toContain("${city}");
     expect(config.agent.system_prompt).toContain("${tempC}");
+  });
+
+  it("should parse explicit web_e2ee config", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+web_e2ee:
+  enabled: true
+  listen_host: 0.0.0.0
+  listen_port: 9999
+  public_origin: https://chat.example.test
+  allowed_origins:
+    - https://chat.example.test
+    - https://alt.example.test
+  path_prefix: /chat
+  pairing:
+    invite_ttl_minutes: 42
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    const config = loadConfig();
+
+    expect(config.web_e2ee).toEqual({
+      enabled: true,
+      listen_host: "0.0.0.0",
+      listen_port: 9999,
+      public_origin: "https://chat.example.test",
+      allowed_origins: ["https://chat.example.test", "https://alt.example.test"],
+      path_prefix: "/chat",
+      pairing: {
+        invite_ttl_minutes: 42,
+      },
+    });
+  });
+
+  it("should allow web_e2ee as the only enabled channel", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+web_e2ee:
+  enabled: true
+  public_origin: https://chat.example.test
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    const config = loadConfig();
+    expect(config.web_e2ee.enabled).toBe(true);
+    expect(config.telegram.token).toBe("");
+    expect(config.whatsapp.enabled).toBe(false);
+  });
+
+  it("should reject invalid web_e2ee.listen_port", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+web_e2ee:
+  enabled: true
+  listen_port: 0
+  public_origin: https://chat.example.test
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    expect(() => loadConfig()).toThrow("web_e2ee.listen_port must be greater than 0");
+  });
+
+  it("should reject invalid web_e2ee.path_prefix", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+web_e2ee:
+  enabled: true
+  path_prefix: chat
+  public_origin: https://chat.example.test
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    expect(() => loadConfig()).toThrow("web_e2ee.path_prefix must start with '/'");
+  });
+
+  it("should reject invalid web_e2ee.allowed_origins", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+web_e2ee:
+  enabled: true
+  public_origin: https://chat.example.test
+  allowed_origins: https://chat.example.test
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    expect(() => loadConfig()).toThrow("web_e2ee.allowed_origins must be a string array");
   });
 
   it("should reject missing required fields", () => {

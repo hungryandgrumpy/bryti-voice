@@ -6,7 +6,7 @@
  * Planned: Discord, Slack, Matrix.
  */
 
-export type Platform = "telegram" | "whatsapp" | "discord" | "slack" | "matrix";
+export type Platform = "telegram" | "whatsapp" | "web_e2ee" | "discord" | "slack" | "matrix";
 
 export interface IncomingMessage {
   /** Platform-specific chat/channel/room ID */

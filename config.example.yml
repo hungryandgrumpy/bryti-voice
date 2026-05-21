@@ -80,6 +80,18 @@ telegram:
 #   enabled: true
 #   allowed_users: []  # international format without + (e.g., 31612345678)
 
+# Self-hosted Bryti-specific encrypted web channel (transport/pairing not yet implemented)
+# web_e2ee:
+#   enabled: true
+#   listen_host: "127.0.0.1"
+#   listen_port: 8787
+#   public_origin: "https://bryti.tailnet.ts.net"
+#   allowed_origins:
+#     - "https://bryti.tailnet.ts.net"
+#   path_prefix: "/"
+#   pairing:
+#     invite_ttl_minutes: 10
+
 # ---------------------------------------------------------------------------
 # Model providers
 #

@@ -3,7 +3,7 @@
  * Bryti entry point.
  *
  * Wires config, persistent pi sessions (one per user), channel bridges
- * (Telegram, WhatsApp), cron scheduler, and the message queue together.
+ * (Telegram, WhatsApp, web_e2ee), cron scheduler, and the message queue together.
  *
  * Startup: load config, ensure data dirs, warm up embedding model, start
  * bridges, start scheduler, begin processing messages.
@@ -46,6 +46,7 @@ import { createHistoryManager } from "./history.js";
 import { warmupEmbeddings, disposeEmbeddings } from "./memory/embeddings.js";
 import { TelegramBridge } from "./channels/telegram.js";
 import { WhatsAppBridge } from "./channels/whatsapp.js";
+import { WebE2EEBridge } from "./channels/web_e2ee.js";
 import { createScheduler } from "./scheduler.js";
 import { MessageQueue } from "./message-queue.js";
 import type { IncomingMessage, ChannelBridge } from "./channels/types.js";
@@ -103,7 +104,7 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
   const trustStore = createTrustStore(config.data_dir, config.trust.approved_tools);
 
   // ---------------------------------------------------------------------------
-  // Bridge setup: Telegram, WhatsApp
+  // Bridge setup: Telegram, WhatsApp, web_e2ee
   // ---------------------------------------------------------------------------
   const bridges: ChannelBridge[] = [];
 
@@ -120,8 +121,13 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
     bridges.push(whatsapp);
   }
 
+  if (config.web_e2ee.enabled) {
+    const webE2EE = new WebE2EEBridge(config.web_e2ee);
+    bridges.push(webE2EE);
+  }
+
   if (bridges.length === 0) {
-    throw new Error("No channel bridges configured. Enable Telegram and/or WhatsApp.");
+    throw new Error("No channel bridges configured. Enable Telegram, WhatsApp, and/or web_e2ee.");
   }
 
   // ---------------------------------------------------------------------------
@@ -217,7 +223,7 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
       const restartMsg: IncomingMessage = {
         channelId: marker.channelId,
         userId: marker.userId,
-        platform: marker.platform as "telegram" | "whatsapp",
+        platform: marker.platform as IncomingMessage["platform"],
         text: `[System: you just restarted. Reason: "${marker.reason}". ` +
           `Verify the restart achieved its goal (check that new tools/extensions loaded, ` +
           `config changes took effect, etc.) and briefly confirm to the user.]`,
