@@ -434,6 +434,18 @@ Some synthetic/internal messages currently assume Telegram defaults in source, f
 - No plaintext transport/channel logs by default.
 - If debugging requires payload visibility later, it must be explicit and opt-in.
 
+## Operator note: creating pairing invites
+
+Current CLI flow:
+
+```bash
+npm run cli -- web-e2ee invite
+# or after build
+node dist/cli.js web-e2ee invite
+```
+
+This prints the plaintext invite code once plus its expiry timestamp. The persisted invite store at `data/web-e2ee/invites.json` stores hash/state metadata only and does not store the plaintext invite code.
+
 ## Summary
 
 `web_e2ee` is intended to become a first-class Bryti channel for self-hosted encrypted web chat. The first implementation should be minimal, auditable, text-only, and compatible with Tailscale/local deployment. Bryti remains the intended plaintext endpoint after local decrypt. Telegram and WhatsApp remain supported unchanged. Audio and assistant voice mode are intentionally deferred until source-level voice/audio support exists in `src/` and should not be inferred from stale `dist/` artefacts.
