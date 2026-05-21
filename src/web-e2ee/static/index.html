@@ -1,0 +1,52 @@
+// src/web-e2ee/static/index.html         
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#111827">
+    <title>Bryti web_e2ee</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app">
+      <h1>Bryti web_e2ee</h1>
+      <p class="lede">Transport shell only. Encrypted chat is not implemented yet.</p>
+
+      <section class="card">
+        <h2>Status</h2>
+        <dl>
+          <div>
+            <dt>HTTP</dt>
+            <dd id="http-status">Loading…</dd>
+          </div>
+          <div>
+            <dt>WebSocket</dt>
+            <dd id="ws-status">Disconnected</dd>
+          </div>
+          <div>
+            <dt>Server fingerprint</dt>
+            <dd id="server-fingerprint">Loading…</dd>
+          </div>
+          <div>
+            <dt>Protocol</dt>
+            <dd id="protocol-version">Loading…</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="card">
+        <h2>Transport note</h2>
+        <p id="transport-note">No encrypted text roundtrip is available in this slice.</p>
+      </section>
+
+      <section class="card muted">
+        <h2>Chat</h2>
+        <input type="text" placeholder="Encrypted chat not implemented yet" disabled>
+        <button type="button" disabled>Send</button>
+      </section>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

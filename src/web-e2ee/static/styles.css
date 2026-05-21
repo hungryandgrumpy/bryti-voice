@@ -1,0 +1,74 @@
+/* src/web-e2ee/static/styles.css    */
+:root {
+  color-scheme: dark;
+  font-family: Inter, system-ui, sans-serif;
+  background: #111827;
+  color: #f9fafb;
+}
+
+body {
+  margin: 0;
+  background: #111827;
+}
+
+.app {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 2rem 1rem 4rem;
+}
+
+h1, h2, p {
+  margin-top: 0;
+}
+
+.lede {
+  color: #cbd5e1;
+}
+
+.card {
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.card.muted {
+  opacity: 0.75;
+}
+
+dl {
+  margin: 0;
+}
+
+ dl div {
+  display: grid;
+  grid-template-columns: 12rem 1fr;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+
+ dt {
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+ dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+input,
+button {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid #4b5563;
+}
+
+button {
+  background: #374151;
+  color: #f9fafb;
+}

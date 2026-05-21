@@ -1,0 +1,10 @@
+
+{
+  "name": "Bryti web_e2ee",
+  "short_name": "Bryti",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#111827",
+  "description": "Bryti web_e2ee transport shell"
+}

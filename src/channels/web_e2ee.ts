@@ -2,6 +2,8 @@
 import { loadOrCreateServerKeyPair } from "../web-e2ee/server-key-store.js";
 import { createDeviceStore } from "../web-e2ee/device-store.js";
 import { createInviteStore } from "../web-e2ee/invite-store.js";
+import { WebE2EEHttpServer } from "../web-e2ee/http-server.js";
+import { WebE2EEWsServer } from "../web-e2ee/ws-server.js";
 import type { ApprovalResult, ChannelBridge, IncomingMessage, SendOpts } from "./types.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
@@ -19,6 +21,8 @@ export class WebE2EEBridge implements ChannelBridge {
 
   private handler: MessageHandler | null = null;
   private started = false;
+  private httpServer: WebE2EEHttpServer | null = null;
+  private wsServer: WebE2EEWsServer | null = null;
 
   constructor(
     private readonly dataDir: string,
@@ -33,19 +37,72 @@ export class WebE2EEBridge implements ChannelBridge {
   ) {}
 
   async start(): Promise<void> {
+    if (this.started) {
+      return;
+    }
+
     const serverKeys = await loadOrCreateServerKeyPair(this.dataDir);
     createDeviceStore(this.dataDir);
     createInviteStore(this.dataDir);
+
+    const httpServer = new WebE2EEHttpServer({
+      listenHost: this.config.listen_host,
+      listenPort: this.config.listen_port,
+      publicOrigin: this.config.public_origin,
+      pathPrefix: this.config.path_prefix,
+      serverInfo: {
+        channel: "web_e2ee",
+        protocolVersion: 1,
+        designVersion: "slice3-transport-shell",
+        serverPublicFingerprint: serverKeys.fingerprint,
+        pathPrefix: this.config.path_prefix,
+        pairingEnabled: this.config.pairing.invite_ttl_minutes > 0,
+        encryptedTransport: false,
+        chatEnabled: false,
+      },
+    });
+
+    await httpServer.start();
+
+    let wsServer: WebE2EEWsServer;
+    try {
+      wsServer = new WebE2EEWsServer(httpServer.getHttpServer(), {
+        pathPrefix: this.config.path_prefix,
+        allowedOrigins: this.config.allowed_origins,
+      });
+    } catch (error) {
+      await httpServer.stop();
+      throw error;
+    }
+
+    this.httpServer = httpServer;
+    this.wsServer = wsServer;
     this.started = true;
+
     console.log(
-      `[web_e2ee] Bridge skeleton started on ${this.config.listen_host}:${this.config.listen_port} ` +
-      `(transport not implemented yet, server fingerprint ${serverKeys.fingerprint})`,
+      `[web_e2ee] Transport shell started on ${this.config.listen_host}:${this.config.listen_port} ` +
+      `(server fingerprint ${serverKeys.fingerprint})`,
     );
   }
 
   async stop(): Promise<void> {
+    if (!this.started) {
+      return;
+    }
+
+    const wsServer = this.wsServer;
+    const httpServer = this.httpServer;
+    this.wsServer = null;
+    this.httpServer = null;
+
+    if (wsServer && httpServer) {
+      wsServer.detachFrom(httpServer.getHttpServer());
+      await wsServer.stop();
+      await httpServer.stop();
+    }
+
     this.started = false;
-    console.log("[web_e2ee] Bridge skeleton stopped");
+    console.log("[web_e2ee] Transport shell stopped");
   }
 
   onMessage(handler: (msg: IncomingMessage) => Promise<void>): void {
@@ -54,17 +111,17 @@ export class WebE2EEBridge implements ChannelBridge {
 
   async sendMessage(_channelId: string, _text: string, _opts?: SendOpts): Promise<string> {
     this.assertStarted();
-    throw new Error("web_e2ee.sendMessage is not implemented yet");
+    throw new Error("web_e2ee.sendMessage is not implemented yet (transport shell only)");
   }
 
   async editMessage(_channelId: string, _messageId: string, _text: string): Promise<void> {
     this.assertStarted();
-    throw new Error("web_e2ee.editMessage is not implemented yet");
+    throw new Error("web_e2ee.editMessage is not implemented yet (transport shell only)");
   }
 
   async sendTyping(_channelId: string): Promise<void> {
     this.assertStarted();
-    throw new Error("web_e2ee.sendTyping is not implemented yet");
+    throw new Error("web_e2ee.sendTyping is not implemented yet (transport shell only)");
   }
 
   async sendApprovalRequest(
@@ -74,7 +131,7 @@ export class WebE2EEBridge implements ChannelBridge {
     _timeoutMs?: number,
   ): Promise<ApprovalResult> {
     this.assertStarted();
-    throw new Error("web_e2ee.sendApprovalRequest is not implemented yet");
+    throw new Error("web_e2ee.sendApprovalRequest is not implemented yet (transport shell only)");
   }
 
   private assertStarted(): void {
