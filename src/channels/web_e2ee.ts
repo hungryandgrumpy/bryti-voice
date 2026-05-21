@@ -170,7 +170,6 @@ export class WebE2EEBridge implements ChannelBridge {
 
   async sendTyping(_channelId: string): Promise<void> {
     this.assertStarted();
-    throw new Error("web_e2ee.sendTyping is not implemented yet (transport shell only)");
   }
 
   async sendApprovalRequest(

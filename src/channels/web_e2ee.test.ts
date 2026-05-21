@@ -273,16 +273,14 @@ describe("WebE2EEBridge", () => {
     await bridge.stop();
   });
 
-  it("keeps edit, typing, and approval requests unimplemented", async () => {
+  it("keeps edit and approval requests unimplemented, but allows no-op typing", async () => {
     const bridge = makeBridge(await getAvailablePort());
     await bridge.start();
 
     await expect(bridge.editMessage("c1", "m1", "hello")).rejects.toThrow(
       "web_e2ee.editMessage is not implemented yet (transport shell only)",
     );
-    await expect(bridge.sendTyping("c1")).rejects.toThrow(
-      "web_e2ee.sendTyping is not implemented yet (transport shell only)",
-    );
+    await expect(bridge.sendTyping("c1")).resolves.toBeUndefined();
     await expect(bridge.sendApprovalRequest("c1", "approve?", "key")).rejects.toThrow(
       "web_e2ee.sendApprovalRequest is not implemented yet (transport shell only)",
     );
