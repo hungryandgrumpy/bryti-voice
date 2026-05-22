@@ -31,6 +31,11 @@ const AUDIO_EXTENSION_BY_MIME: Record<WebE2EEAudioMimeType, string> = {
 };
 const WEB_E2EE_VOICE_PLACEHOLDER = "The user sent a voice message.";
 const MAX_CLIENT_FILENAME_LENGTH = 120;
+const AUDIO_MIME_BY_EXTENSION = new Map<string, WebE2EEAudioMimeType>([
+  [".ogg", "audio/ogg"],
+  [".opus", "audio/opus"],
+  [".webm", "audio/webm"],
+]);
 
 function ensureIncomingAudioDir(dataDir: string): string {
   const dir = path.join(dataDir, "files", "voice");
@@ -89,6 +94,34 @@ function writeIncomingAudioAttachment(
   };
 }
 
+function getOutgoingAudioMimeType(audioPath: string): WebE2EEAudioMimeType {
+  const ext = path.extname(audioPath).toLowerCase();
+  const mimeType = AUDIO_MIME_BY_EXTENSION.get(ext);
+  if (!mimeType) {
+    throw new Error(`Unsupported web_e2ee voice reply extension: ${ext || "(none)"}`);
+  }
+  return mimeType;
+}
+
+function readOutgoingAudioFile(audioPath: string): Buffer {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(audioPath);
+  } catch {
+    throw new Error(`web_e2ee voice reply file is missing: ${audioPath}`);
+  }
+  if (!stat.isFile()) {
+    throw new Error(`web_e2ee voice reply path is not a file: ${audioPath}`);
+  }
+  if (stat.size <= 0) {
+    throw new Error("web_e2ee voice reply file is empty");
+  }
+  if (stat.size > WEB_E2EE_MAX_AUDIO_BYTES) {
+    throw new Error(`web_e2ee voice reply exceeds ${WEB_E2EE_MAX_AUDIO_BYTES} bytes`);
+  }
+  return fs.readFileSync(audioPath);
+}
+
 function mapDecryptedEventToIncomingMessage(dataDir: string, event: DecryptedMessageEvent): IncomingMessage {
   if (event.payload.kind === "text") {
     return {
@@ -109,6 +142,7 @@ function mapDecryptedEventToIncomingMessage(dataDir: string, event: DecryptedMes
     platform: "web_e2ee",
     raw: event.raw,
     audio: [writeIncomingAudioAttachment(dataDir, event.payload)],
+    replyMode: "voice",
   };
 }
 
@@ -254,6 +288,22 @@ export class WebE2EEBridge implements ChannelBridge {
       throw new Error("web_e2ee websocket server not started");
     }
     return await this.wsServer.sendEncryptedText(channelId, text);
+  }
+
+  async sendVoice(channelId: string, audioPath: string, _opts?: { caption?: string }): Promise<string> {
+    this.assertStarted();
+    if (!this.wsServer) {
+      throw new Error("web_e2ee websocket server not started");
+    }
+
+    const mimeType = getOutgoingAudioMimeType(audioPath);
+    const bytes = readOutgoingAudioFile(audioPath);
+    return await this.wsServer.sendEncryptedPayload(channelId, {
+      kind: "audio",
+      mimeType,
+      dataBase64: bytes.toString("base64"),
+      fileName: path.basename(audioPath),
+    });
   }
 
   async editMessage(_channelId: string, _messageId: string, _text: string): Promise<void> {

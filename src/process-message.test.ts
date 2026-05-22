@@ -348,6 +348,9 @@ describe("processMessage pipeline", () => {
     config.voice!.reply_with_voice = true;
     config.voice!.synthesize_command = ["stub", "{input}", "{output}"];
 
+    const outputPath = path.join(tmpDir, "reply-fail.ogg");
+    fs.writeFileSync(outputPath, "voice reply");
+
     const session = makeUserSession("12345", [assistantMsg("Fallback text")]);
     const state = makeState(config, session, tmpDir);
     const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
@@ -356,7 +359,7 @@ describe("processMessage pipeline", () => {
     });
     state.voiceService = {
       transcribe: vi.fn(async () => "unused"),
-      synthesize: vi.fn(async () => path.join(tmpDir, "missing.ogg")),
+      synthesize: vi.fn(async () => outputPath),
     };
 
     await processMessage(state, {
@@ -366,6 +369,7 @@ describe("processMessage pipeline", () => {
 
     expect(bridge.sent).toHaveLength(1);
     expect(bridge.sent[0].text).toBe("Fallback text");
+    expect(fs.existsSync(outputPath)).toBe(false);
   });
 
   it("cleans incoming audio temp files when voice is disabled", async () => {

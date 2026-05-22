@@ -20,6 +20,7 @@ import {
   assertValidEncryptedFrame,
   assertValidEncryptedTextPayload,
   canonicalFrameHeader,
+  type CanonicalFrameHeader,
   type DecryptedMessageEvent,
   type EncryptedAudioPayload,
   type EncryptedTextPayload,
@@ -146,6 +147,10 @@ export class WebE2EEWsServer {
   }
 
   async sendEncryptedText(deviceId: string, text: string): Promise<string> {
+    return await this.sendEncryptedPayload(deviceId, { kind: "text", text });
+  }
+
+  async sendEncryptedPayload(deviceId: string, payload: EncryptedTextPayload | EncryptedAudioPayload): Promise<string> {
     const device = this.options.deviceStore.get(deviceId);
     if (!device) {
       throw new Error(`Unknown web_e2ee device: ${deviceId}`);
@@ -163,26 +168,17 @@ export class WebE2EEWsServer {
     const ts = new Date().toISOString();
     this.options.deviceStore.updateLastOutboundCounter(deviceId, nextCounter, ts);
 
-    const devicePublicKey = await importPublicKeyJwk(device.publicKeyJwk);
-    const serverPublicKeyRaw = await exportRawPublicKey(this.options.serverKeys.publicKey);
-    const devicePublicKeyRaw = publicKeyJwkToRawBytes(device.publicKeyJwk);
-    const { s2cKey } = await deriveDirectionalAesKeys(
-      this.options.serverKeys.privateKey,
-      devicePublicKey,
-      serverPublicKeyRaw,
-      devicePublicKeyRaw,
-    );
-    const payload = assertValidEncryptedTextPayload({ kind: "text", text });
-    const frame = {
-      v: 1 as const,
-      kind: "msg" as const,
+    const validatedPayload = this.assertValidMessagePayload(payload);
+    const frame: CanonicalFrameHeader = {
+      v: 1,
+      kind: "msg",
       deviceId,
       messageId: generateMessageId(),
       counter: nextCounter,
       ts,
       nonce: bytesToBase64Url(generateMessageNonce()),
     };
-    const ciphertext = await encryptPayload(s2cKey, frame, payload);
+    const ciphertext = await this.encryptOutboundPayload(device.publicKeyJwk, frame, validatedPayload);
 
     try {
       await new Promise<void>((resolve, reject) => {
@@ -303,6 +299,23 @@ export class WebE2EEWsServer {
     } catch {
       this.sendJson(socket, { kind: "error", code: "handler_failed" });
     }
+  }
+
+  private async encryptOutboundPayload(
+    publicKeyJwk: JsonWebKey,
+    frame: CanonicalFrameHeader,
+    payload: EncryptedTextPayload | EncryptedAudioPayload,
+  ): Promise<string> {
+    const devicePublicKey = await importPublicKeyJwk(publicKeyJwk);
+    const serverPublicKeyRaw = await exportRawPublicKey(this.options.serverKeys.publicKey);
+    const devicePublicKeyRaw = publicKeyJwkToRawBytes(publicKeyJwk);
+    const { s2cKey } = await deriveDirectionalAesKeys(
+      this.options.serverKeys.privateKey,
+      devicePublicKey,
+      serverPublicKeyRaw,
+      devicePublicKeyRaw,
+    );
+    return await encryptPayload(s2cKey, frame, payload);
   }
 
   private assertValidMessagePayload(decrypted: unknown): EncryptedTextPayload | EncryptedAudioPayload {

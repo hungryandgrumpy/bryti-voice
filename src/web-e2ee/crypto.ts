@@ -2,6 +2,7 @@ import { base64UrlToBytes, bytesToBase64Url, encodeBase32, normalizeInviteCode, 
 import {
   canonicalFrameHeaderBytes,
   type CanonicalFrameHeader,
+  type EncryptedAudioPayload,
   type EncryptedBindPayload,
   type EncryptedTextPayload,
 } from "./protocol.js";
@@ -154,7 +155,7 @@ export async function deriveDirectionalAesKeys(
 export async function encryptPayload(
   key: CryptoKey,
   header: CanonicalFrameHeader,
-  payload: EncryptedTextPayload | EncryptedBindPayload,
+  payload: EncryptedTextPayload | EncryptedAudioPayload | EncryptedBindPayload,
 ): Promise<string> {
   const plaintextBytes = utf8ToBytes(JSON.stringify(payload));
   const ciphertext = await crypto.subtle.encrypt(

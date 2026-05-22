@@ -214,6 +214,7 @@ describe("WebE2EEBridge", () => {
       messageId: "msg_1",
       platform: "web_e2ee",
       text: "The user sent a voice message.",
+      replyMode: "voice",
     }));
     expect(msg.audio).toHaveLength(1);
     expect(msg.audio[0].mimeType).toBe("audio/ogg");
@@ -320,6 +321,77 @@ describe("WebE2EEBridge", () => {
     await bridge.stop();
   });
 
+  it("sends encrypted audio replies to the connected paired browser", async () => {
+    const port = await getAvailablePort();
+    const bridge = makeBridge(port);
+    const devicePair = await registerDevice();
+    await bridge.start();
+
+    const audioPath = path.join(tempDir, "reply.ogg");
+    fs.writeFileSync(audioPath, "voice reply bytes");
+
+    const ws = await new Promise<WebSocket>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+        headers: { Origin: "https://bryti.tailnet.ts.net" },
+      });
+      socket.once("message", () => resolve(socket));
+      socket.once("error", reject);
+    });
+
+    ws.send(JSON.stringify(await makeEncryptedFrame(1, { kind: "text", text: "bind me" }, devicePair)));
+    await vi.waitUntil(
+      () => {
+        const wsServer = (bridge as unknown as { wsServer: { boundSockets: Map<string, WebSocket> } | null }).wsServer;
+        return wsServer?.boundSockets.get("wed_test") != null;
+      },
+      { timeout: 1000, interval: 10 },
+    );
+
+    const replyPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
+      ws.once("message", (data) => {
+        try {
+          resolve(JSON.parse(String(data)) as Record<string, unknown>);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+
+    const messageId = await bridge.sendVoice!("wed_test", audioPath);
+    const reply = await replyPromise;
+
+    const serverKeys = await loadOrCreateServerKeyPair(tempDir);
+    const serverPublicRaw = await exportRawPublicKey(serverKeys.publicKey);
+    const devicePublicRaw = await exportRawPublicKey(devicePair.publicKey);
+    const { s2cKey } = await deriveDirectionalAesKeys(
+      devicePair.privateKey,
+      serverKeys.publicKey,
+      serverPublicRaw,
+      devicePublicRaw,
+    );
+    const payload = await decryptPayload(s2cKey, {
+      v: reply.v as 1,
+      kind: reply.kind as "msg",
+      deviceId: String(reply.deviceId),
+      messageId: String(reply.messageId),
+      counter: Number(reply.counter),
+      ts: String(reply.ts),
+      nonce: String(reply.nonce),
+    }, String(reply.ciphertext));
+
+    expect(messageId).toMatch(/^msg_/);
+    expect(payload).toEqual({
+      kind: "audio",
+      mimeType: "audio/ogg",
+      dataBase64: Buffer.from("voice reply bytes").toString("base64"),
+      fileName: "reply.ogg",
+    });
+    expect(fs.existsSync(audioPath)).toBe(true);
+
+    ws.close();
+    await bridge.stop();
+  });
+
   it("throws a clear error when sendMessage targets an offline device", async () => {
     const bridge = makeBridge(await getAvailablePort());
     await registerDevice();
@@ -328,6 +400,52 @@ describe("WebE2EEBridge", () => {
     await expect(bridge.sendMessage("wed_test", "hello")).rejects.toThrow(
       "web_e2ee device is offline: wed_test",
     );
+
+    await bridge.stop();
+  });
+
+  it("throws a clear error when sendVoice targets an offline device", async () => {
+    const bridge = makeBridge(await getAvailablePort());
+    await registerDevice();
+    await bridge.start();
+
+    const audioPath = path.join(tempDir, "reply.ogg");
+    fs.writeFileSync(audioPath, "voice reply bytes");
+
+    await expect(bridge.sendVoice!("wed_test", audioPath)).rejects.toThrow(
+      "web_e2ee device is offline: wed_test",
+    );
+
+    expect(fs.existsSync(audioPath)).toBe(true);
+    await bridge.stop();
+  });
+
+  it("rejects unsupported synthesized audio extensions", async () => {
+    const bridge = makeBridge(await getAvailablePort());
+    await bridge.start();
+
+    const audioPath = path.join(tempDir, "reply.mp3");
+    fs.writeFileSync(audioPath, "voice reply bytes");
+
+    await expect(bridge.sendVoice!("wed_test", audioPath)).rejects.toThrow(
+      "Unsupported web_e2ee voice reply extension: .mp3",
+    );
+
+    await bridge.stop();
+  });
+
+  it("rejects oversized synthesized audio files", async () => {
+    const bridge = makeBridge(await getAvailablePort());
+    await registerDevice();
+    await bridge.start();
+
+    const audioPath = path.join(tempDir, "reply.ogg");
+    fs.writeFileSync(audioPath, Buffer.alloc((2 * 1024 * 1024) + 1));
+
+    await expect(bridge.sendVoice!("wed_test", audioPath)).rejects.toThrow(
+      "web_e2ee voice reply exceeds 2097152 bytes",
+    );
+    expect(fs.existsSync(audioPath)).toBe(true);
 
     await bridge.stop();
   });

@@ -558,6 +558,42 @@ describe("WebE2EEWsServer", () => {
     ws.close();
   });
 
+  it("encrypts outbound audio frames for the bound live socket", async () => {
+    const created = await createServers("/");
+    tempDirs.push(created.tempDir);
+    servers.push(created);
+    const { devicePair } = await registerDevice(created.deviceStore);
+    const { ws } = await connectWebSocketWithHello(
+      `${created.httpServer.getBaseUrl().replace("http", "ws")}/ws`,
+      "https://chat.example.test",
+    );
+
+    ws.send(JSON.stringify(await makeEncryptedFrame(1, "bind", { kind: "bind" }, devicePair, created.serverKeys.publicKey)));
+    await vi.waitFor(() => {
+      expect(created.deviceStore.get("wed_test")?.lastInboundCounter).toBe(1);
+    });
+
+    const messageId = await created.wsServer.sendEncryptedPayload("wed_test", {
+      kind: "audio",
+      mimeType: "audio/ogg",
+      dataBase64: Buffer.from("voice reply bytes").toString("base64"),
+      fileName: "reply.ogg",
+    });
+    const reply = await nextJsonMessage(ws);
+    const payload = await decryptReplyFrame(reply, devicePair, created.serverKeys.publicKey);
+
+    expect(messageId).toMatch(/^msg_/);
+    expect(reply).toMatchObject({ kind: "msg", deviceId: "wed_test", messageId, counter: 1 });
+    expect(payload).toEqual({
+      kind: "audio",
+      mimeType: "audio/ogg",
+      dataBase64: Buffer.from("voice reply bytes").toString("base64"),
+      fileName: "reply.ogg",
+    });
+    expect(created.deviceStore.get("wed_test")?.lastOutboundCounter).toBe(1);
+    ws.close();
+  });
+
   it("throws a clear error when sending to an offline device", async () => {
     const created = await createServers("/");
     tempDirs.push(created.tempDir);
@@ -630,6 +666,42 @@ describe("WebE2EEWsServer", () => {
     serverSocket!.send = originalSend;
     ws.close();
     ws2.close();
+  });
+
+  it("persists outbound counter before send for audio", async () => {
+    const created = await createServers("/");
+    tempDirs.push(created.tempDir);
+    servers.push(created);
+    const { devicePair } = await registerDevice(created.deviceStore);
+    const { ws } = await connectWebSocketWithHello(
+      `${created.httpServer.getBaseUrl().replace("http", "ws")}/ws`,
+      "https://chat.example.test",
+    );
+
+    ws.send(JSON.stringify(await makeEncryptedFrame(1, "bind", { kind: "bind" }, devicePair, created.serverKeys.publicKey)));
+    await vi.waitFor(() => {
+      expect(created.deviceStore.get("wed_test")?.lastInboundCounter).toBe(1);
+    });
+
+    const boundSockets = (created.wsServer as unknown as { boundSockets: Map<string, WebSocket> }).boundSockets;
+    const serverSocket = boundSockets.get("wed_test");
+    expect(serverSocket).toBeTruthy();
+    const originalSend = serverSocket!.send.bind(serverSocket);
+    serverSocket!.send = ((_: unknown, cb?: (err?: Error) => void) => {
+      cb?.(new Error("simulated send failure"));
+      return undefined as never;
+    }) as typeof serverSocket.send;
+
+    await expect(created.wsServer.sendEncryptedPayload("wed_test", {
+      kind: "audio",
+      mimeType: "audio/ogg",
+      dataBase64: Buffer.from("voice reply bytes").toString("base64"),
+      fileName: "reply.ogg",
+    })).rejects.toThrow("Failed to deliver web_e2ee message to device: wed_test");
+    expect(created.deviceStore.get("wed_test")?.lastOutboundCounter).toBe(1);
+
+    serverSocket!.send = originalSend;
+    ws.close();
   });
 
   it("routes replies only to the newest bound socket for a device", async () => {
