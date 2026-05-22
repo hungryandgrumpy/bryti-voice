@@ -135,6 +135,11 @@ button:disabled {
   opacity: 0.6;
 }
 
+.voice-ready-highlight {
+  border-color: #34d399;
+  box-shadow: 0 0 0 0.18rem rgba(52, 211, 153, 0.3);
+}
+
 .chat-log {
   min-height: 4rem;
   max-height: 18rem;

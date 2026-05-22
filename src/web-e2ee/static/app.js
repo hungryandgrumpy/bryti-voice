@@ -119,6 +119,9 @@ function updateChatAvailability() {
   if (!audioSupported) {
     recordingStatusEl.textContent = "Browser audio input is unavailable in this browser.";
   }
+  if (recordStartEl.disabled) {
+    recordStartEl.classList.remove("voice-ready-highlight");
+  }
   syncPairedLayout();
 }
 
@@ -194,6 +197,29 @@ function clearLocalChat() {
   chatLogEl.replaceChildren();
 }
 
+function clearVoiceReadyHighlight() {
+  recordStartEl.classList.remove("voice-ready-highlight");
+}
+
+function applyVoiceReadyHighlight() {
+  clearVoiceReadyHighlight();
+  if (recordStartEl.disabled) {
+    return;
+  }
+  recordStartEl.classList.add("voice-ready-highlight");
+  window.setTimeout(() => {
+    recordStartEl.classList.remove("voice-ready-highlight");
+  }, 2200);
+}
+
+function setVoiceReadyStatus() {
+  recordingStatusEl.textContent = "Reply finished. Ready for your next voice message.";
+  if (!recordStopEl.disabled) {
+    recordStopEl.disabled = true;
+  }
+  applyVoiceReadyHighlight();
+}
+
 function appendAssistantAudioMessage(objectUrl) {
   const line = document.createElement("div");
   line.className = "chat-line chat-line-assistant chat-line-audio";
@@ -211,6 +237,25 @@ function appendAssistantAudioMessage(objectUrl) {
   player.controls = true;
   player.preload = "none";
   player.src = objectUrl;
+
+  let playbackEnded = false;
+  player.addEventListener("play", () => {
+    playbackEnded = false;
+    clearVoiceReadyHighlight();
+  });
+  player.addEventListener("ended", () => {
+    playbackEnded = true;
+    setVoiceReadyStatus();
+  });
+  player.addEventListener("pause", () => {
+    if (!playbackEnded) {
+      clearVoiceReadyHighlight();
+    }
+  });
+  player.addEventListener("error", () => {
+    recordingStatusEl.textContent = "Could not play voice reply. Use the audio control or send text.";
+    clearVoiceReadyHighlight();
+  });
 
   line.append(label, status, player);
   chatLogEl.append(line);
