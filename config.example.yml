@@ -163,6 +163,27 @@ tools:
 #     public_url: "https://docs.example.com"
 
 # ---------------------------------------------------------------------------
+# Voice support (optional, disabled by default)
+#
+# Bryti does not ship a speech-to-text or text-to-speech engine. Instead, it
+# can call commands you configure. Commands are argv arrays, not shell strings.
+# {input} and {output} are replaced with temporary file paths.
+#
+# - transcribe_command reads an audio file at {input} and writes UTF-8 text to {output}
+# - synthesize_command reads UTF-8 text from {input} and writes an audio file to {output}
+# ---------------------------------------------------------------------------
+
+# voice:
+#   enabled: false
+#   transcribe_command: ["/path/to/stt", "{input}", "--output", "{output}"]
+#   synthesize_command: ["/path/to/tts", "{input}", "--output", "{output}"]
+#   reply_with_voice: true
+#   keep_temp_files: false
+#   command_timeout_ms: 120000
+#   synthesized_audio_extension: ".ogg"
+#   max_tts_chars: 2500
+
+# ---------------------------------------------------------------------------
 # Optional sections (uncomment to customize)
 # ---------------------------------------------------------------------------
 

@@ -3,7 +3,7 @@ import { MessageQueue } from "./message-queue.js";
 import type { IncomingMessage } from "./channels/types.js";
 
 function makeMsg(text: string, channelId = "chan1"): IncomingMessage {
-  return { text, channelId, userId: "user1" };
+  return { text, channelId, userId: "user1", platform: "telegram", raw: null };
 }
 
 describe("MessageQueue", () => {
@@ -27,11 +27,10 @@ describe("MessageQueue", () => {
   });
 
   it("processes multiple messages sequentially", async () => {
-    // Use a latch so we can control when the first message finishes
     let release!: () => void;
     let calls = 0;
     const controlled = vi.fn(async (msg: IncomingMessage) => {
-      calls++;
+      calls += 1;
       processed.push(msg);
       if (calls === 1) {
         await new Promise<void>((res) => { release = res; });
@@ -42,37 +41,30 @@ describe("MessageQueue", () => {
     q.enqueue(makeMsg("first"));
     q.enqueue(makeMsg("second"));
 
-    // Wait until first is being processed
     await vi.waitUntil(() => calls === 1);
     expect(processed).toHaveLength(1);
     expect(q.isProcessing("chan1")).toBe(true);
 
-    // Release first, second should follow
     release();
     await vi.waitUntil(() => processed.length === 2);
     expect(processed[1].text).toBe("second");
   });
 
   it("rejects messages when queue is full", async () => {
-    // Block processFn indefinitely so the queue fills
     let release!: () => void;
     const blocked = vi.fn(async () => {
       await new Promise<void>((res) => { release = res; });
     });
 
-    const MAX = 3;
-    const q = new MessageQueue(blocked, rejectFn, MAX);
+    const maxDepth = 3;
+    const q = new MessageQueue(blocked, rejectFn, maxDepth);
 
-    // First message starts processing immediately (not queued)
     q.enqueue(makeMsg("msg0"));
     await vi.waitUntil(() => blocked.mock.calls.length === 1);
 
-    // Fill the queue to max
     q.enqueue(makeMsg("msg1"));
     q.enqueue(makeMsg("msg2"));
     q.enqueue(makeMsg("msg3"));
-
-    // This one exceeds the max
     q.enqueue(makeMsg("overflow"));
 
     await vi.waitUntil(() => rejected.length >= 1);
@@ -84,27 +76,19 @@ describe("MessageQueue", () => {
   it("merges messages within the merge window", async () => {
     const q = new MessageQueue(processFn, rejectFn, MAX_DEPTH_DEFAULT, 5000);
 
-    // Simulate three messages arriving at t=0, t=1000, t=2000 (all within 5s)
-    const now = Date.now();
-    // Access internals via enqueue — we fake arrivedAt by manipulating the
-    // queue entries directly after enqueue
     q.enqueue(makeMsg("part one"));
     q.enqueue(makeMsg("part two"));
     q.enqueue(makeMsg("part three"));
 
     await vi.waitUntil(() => processed.length >= 1, { timeout: 2000 });
 
-    // All three should have been merged (they all arrive nearly simultaneously)
-    const texts = processed.map((m) => m.text);
-    // The merged text contains all parts joined by newline
-    const merged = texts.join(" ");
+    const merged = processed.map((m) => m.text).join(" ");
     expect(merged).toContain("part one");
     expect(merged).toContain("part two");
     expect(merged).toContain("part three");
   });
 
   it("does not merge messages outside the merge window", async () => {
-    // Use a tiny merge window so nothing merges
     const q = new MessageQueue(processFn, rejectFn, 10, 0);
 
     q.enqueue(makeMsg("alpha"));
@@ -114,6 +98,36 @@ describe("MessageQueue", () => {
 
     expect(processed[0].text).toBe("alpha");
     expect(processed[1].text).toBe("beta");
+  });
+
+  it("preserves audio attachments when merging messages", () => {
+    const q = new MessageQueue(processFn, rejectFn, MAX_DEPTH_DEFAULT, 5000);
+    const merged = (q as any).mergeEntries([
+      {
+        msg: {
+          ...makeMsg("voice"),
+          audio: [{ path: "/tmp/voice.ogg", mimeType: "audio/ogg", durationSeconds: 3 }],
+          replyMode: "voice",
+        },
+        arrivedAt: 0,
+      },
+      { msg: makeMsg("caption"), arrivedAt: 1 },
+    ]) as IncomingMessage;
+
+    expect(merged.audio).toEqual([
+      { path: "/tmp/voice.ogg", mimeType: "audio/ogg", durationSeconds: 3 },
+    ]);
+    expect(merged.text).toBe("voice\ncaption");
+  });
+
+  it("preserves voice reply mode when merging messages", () => {
+    const q = new MessageQueue(processFn, rejectFn, MAX_DEPTH_DEFAULT, 5000);
+    const merged = (q as any).mergeEntries([
+      { msg: makeMsg("text"), arrivedAt: 0 },
+      { msg: { ...makeMsg("voice"), replyMode: "voice" }, arrivedAt: 1 },
+    ]) as IncomingMessage;
+
+    expect(merged.replyMode).toBe("voice");
   });
 
   it("tracks queue depth correctly", async () => {

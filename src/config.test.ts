@@ -476,6 +476,152 @@ cron: []
     delete process.env.COST_INPUT;
     delete process.env.COST_OUTPUT;
   });
+
+  it("defaults voice support to disabled", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+telegram:
+  token: test-token
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    const config = loadConfig();
+
+    expect(config.voice).toEqual({
+      enabled: false,
+      transcribe_command: [],
+      synthesize_command: [],
+      reply_with_voice: true,
+      keep_temp_files: false,
+      command_timeout_ms: 120000,
+      synthesized_audio_extension: ".ogg",
+      max_tts_chars: 2500,
+    });
+  });
+
+  it("loads enabled voice command config", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+telegram:
+  token: test-token
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+voice:
+  enabled: true
+  transcribe_command: ["stt", "{input}", "--out", "{output}"]
+  synthesize_command: ["tts", "{input}", "--out", "{output}"]
+  reply_with_voice: true
+  keep_temp_files: true
+  command_timeout_ms: 30000
+  synthesized_audio_extension: ".opus"
+  max_tts_chars: 1000
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    const config = loadConfig();
+
+    expect(config.voice).toEqual({
+      enabled: true,
+      transcribe_command: ["stt", "{input}", "--out", "{output}"],
+      synthesize_command: ["tts", "{input}", "--out", "{output}"],
+      reply_with_voice: true,
+      keep_temp_files: true,
+      command_timeout_ms: 30000,
+      synthesized_audio_extension: ".opus",
+      max_tts_chars: 1000,
+    });
+  });
+
+  it("rejects enabled voice config without transcribe placeholders", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+telegram:
+  token: test-token
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+voice:
+  enabled: true
+  transcribe_command: ["stt", "audio.wav"]
+  synthesize_command: ["tts", "{input}", "{output}"]
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    expect(() => loadConfig()).toThrow("voice.transcribe_command must include {input}");
+    expect(() => loadConfig()).toThrow("voice.transcribe_command must include {output}");
+  });
+
+  it("requires synthesize command only when voice replies are enabled", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+telegram:
+  token: test-token
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+voice:
+  enabled: true
+  reply_with_voice: false
+  transcribe_command: ["stt", "{input}", "{output}"]
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    const config = loadConfig();
+    expect(config.voice?.enabled).toBe(true);
+    expect(config.voice?.reply_with_voice).toBe(false);
+  });
+
+  it("rejects missing synthesize command when voice replies are enabled", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+telegram:
+  token: test-token
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+voice:
+  enabled: true
+  reply_with_voice: true
+  transcribe_command: ["stt", "{input}", "{output}"]
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    expect(() => loadConfig()).toThrow("voice.synthesize_command is required when voice is enabled");
+  });
 });
 
 describe("applyIntegrationEnvVars", () => {

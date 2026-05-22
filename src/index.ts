@@ -57,6 +57,7 @@ import { recoverPendingCheckpoints } from "./crash-recovery.js";
 import { startProactiveCompaction } from "./compaction/proactive.js";
 import { createEventsWatcher } from "./events-watcher.js";
 import { checkForUpdate } from "./update-check.js";
+import { createVoiceService } from "./voice.js";
 import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
 const { version: BRYTI_VERSION } = _require("../package.json") as { version: string };
@@ -114,6 +115,7 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
   const historyManager = createHistoryManager(config.data_dir);
   const usageTracker = createUsageTracker(config.data_dir);
   const trustStore = createTrustStore(config.data_dir, config.trust.approved_tools);
+  const voiceService = createVoiceService(config);
 
   // ---------------------------------------------------------------------------
   // Bridge setup: Telegram, WhatsApp, web_e2ee
@@ -157,6 +159,7 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
     trustStore,
     lastUserMessages: new Map(),
     recoveredSessions: new Set(),
+    voiceService,
     requestRestart: onRequestRestart ?? null,
   };
 

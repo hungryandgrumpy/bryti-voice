@@ -34,7 +34,8 @@ import {
 import { createProjectionStore } from "./projection/index.js";
 import { createModelInfra } from "./model-infra.js";
 import type { Scheduler } from "./scheduler.js";
-import type { IncomingMessage, ChannelBridge } from "./channels/types.js";
+import type { AudioAttachment, IncomingMessage, ChannelBridge } from "./channels/types.js";
+import type { VoiceService } from "./voice.js";
 import {
   createTrustStore,
   checkPendingApproval,
@@ -86,6 +87,8 @@ export interface AppState {
   lastUserMessages: Map<string, string>;
   /** Users whose session was recovered after corruption — notified on next message. */
   recoveredSessions: Set<string>;
+  /** Optional speech-to-text/text-to-speech service. Present only when voice is enabled. */
+  voiceService?: VoiceService | null;
   /**
    * Signal the supervisor to restart the app. Set by runWithSupervisor().
    * Falls back to process.exit(RESTART_EXIT_CODE) when null.
@@ -145,6 +148,96 @@ function modelNameForLog(
 ): string {
   if (provider && model) return `${provider}/${model}`;
   return model || fallback;
+}
+
+const DEFAULT_VOICE_MESSAGE_TEXT = "The user sent a voice message.";
+
+function shouldKeepVoiceTempFiles(state: AppState): boolean {
+  return state.config.voice?.keep_temp_files === true;
+}
+
+function cleanupPath(kind: "incoming" | "outgoing", filePath: string): void {
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch (err) {
+    const label = path.basename(filePath) || `${kind} temp file`;
+    console.warn(`[voice] Failed to clean up ${kind} temp file (${label}):`, (err as Error).message);
+  }
+}
+
+function cleanupIncomingAudioFiles(state: AppState, audio?: AudioAttachment[]): void {
+  if (shouldKeepVoiceTempFiles(state) || !audio || audio.length === 0) return;
+  for (const attachment of audio) {
+    if (attachment?.path) cleanupPath("incoming", attachment.path);
+  }
+}
+
+function cleanupOutgoingAudioFile(state: AppState, audioPath: string): void {
+  if (shouldKeepVoiceTempFiles(state) || !audioPath) return;
+  cleanupPath("outgoing", audioPath);
+}
+
+function voicePromptText(transcript: string, originalText: string): string {
+  const cleaned = originalText.trim();
+  const parts = ["[Voice message transcript]", transcript.trim()];
+  if (cleaned && cleaned !== DEFAULT_VOICE_MESSAGE_TEXT) {
+    parts.push("", "[User caption/message]", cleaned);
+  }
+  return parts.join("\n");
+}
+
+async function prepareVoiceMessage(state: AppState, msg: IncomingMessage): Promise<IncomingMessage | null> {
+  if (!msg.audio || msg.audio.length === 0) {
+    return msg;
+  }
+
+  const bridge = getBridge(state, msg.platform);
+  if (!state.config.voice?.enabled) {
+    await bridge.sendMessage(msg.channelId, "Voice messages are not enabled. Please send text instead.");
+    return null;
+  }
+  if (!state.voiceService) {
+    await bridge.sendMessage(msg.channelId, "Voice support is enabled but unavailable. Please send text instead.");
+    return null;
+  }
+
+  try {
+    const transcript = await state.voiceService.transcribe(msg.audio);
+    cleanupIncomingAudioFiles(state, msg.audio);
+    return {
+      ...msg,
+      text: voicePromptText(transcript, msg.text),
+    };
+  } catch (err) {
+    cleanupIncomingAudioFiles(state, msg.audio);
+    console.warn(`[voice] Transcription failed for ${msg.userId}:`, (err as Error).message);
+    await bridge.sendMessage(msg.channelId, "I couldn't transcribe that voice message. Please send text or try again.");
+    return null;
+  }
+}
+
+async function sendAssistantResponse(state: AppState, msg: IncomingMessage, text: string): Promise<void> {
+  const bridge = getBridge(state, msg.platform);
+  if (
+    msg.replyMode === "voice" &&
+    state.config.voice?.enabled &&
+    state.config.voice.reply_with_voice &&
+    state.voiceService &&
+    bridge.sendVoice
+  ) {
+    let audioPath = "";
+    try {
+      audioPath = await state.voiceService.synthesize(text);
+      await bridge.sendVoice(msg.channelId, audioPath);
+      cleanupOutgoingAudioFile(state, audioPath);
+      return;
+    } catch (err) {
+      if (audioPath) cleanupOutgoingAudioFile(state, audioPath);
+      console.warn(`[voice] Synthesis/send failed for ${msg.userId}, falling back to text:`, (err as Error).message);
+    }
+  }
+
+  await bridge.sendMessage(msg.channelId, text);
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +466,10 @@ export async function processMessage(
 
   if (wasCommand) return;
 
+  const voicePreparedMsg = await prepareVoiceMessage(state, msg);
+  if (!voicePreparedMsg) return;
+  msg = voicePreparedMsg;
+
   const MAX_MESSAGE_LENGTH = 10_000;
   if (msg.text.length > MAX_MESSAGE_LENGTH) {
     await getBridge(state, msg.platform).sendMessage(
@@ -579,7 +676,7 @@ export async function processMessage(
         role: "assistant",
         content: combinedText,
       });
-      await getBridge(state, msg.platform).sendMessage(msg.channelId, combinedText);
+      await sendAssistantResponse(state, msg, combinedText);
     } else if (!isSchedulerMessage) {
       console.log(
         `[agent] No text response from ${msg.userId} after user message, re-prompting`,
@@ -597,7 +694,7 @@ export async function processMessage(
       const followUpText = extractResponseText(followUpMsg);
       if (followUpText.trim() && followUpText.trim() !== SILENT_REPLY_TOKEN) {
         await state.historyManager.append({ role: "assistant", content: followUpText });
-        await getBridge(state, msg.platform).sendMessage(msg.channelId, followUpText);
+        await sendAssistantResponse(state, msg, followUpText);
       }
     } else {
       console.log(
