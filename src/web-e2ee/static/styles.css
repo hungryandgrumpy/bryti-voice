@@ -23,6 +23,10 @@ h1, h2, p {
   margin-top: 0;
 }
 
+h2 {
+  margin-bottom: 0;
+}
+
 .lede {
   color: #cbd5e1;
 }
@@ -88,6 +92,21 @@ button {
   cursor: pointer;
 }
 
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.chat-header button {
+  width: auto;
+  margin-top: 0;
+  padding: 0.5rem 0.75rem;
+  white-space: nowrap;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.6;
@@ -124,4 +143,18 @@ button:disabled {
 
 .chat-line-assistant {
   border: 1px solid #059669;
+}
+
+.chat-line-audio {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.chat-audio-label {
+  color: #d1fae5;
+}
+
+.chat-audio-player {
+  width: 100%;
 }

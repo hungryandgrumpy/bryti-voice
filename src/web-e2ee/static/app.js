@@ -25,6 +25,7 @@ const recordStartEl = document.getElementById("record-start");
 const recordStopEl = document.getElementById("record-stop");
 const recordingStatusEl = document.getElementById("recording-status");
 const chatLogEl = document.getElementById("chat-log");
+const chatClearEl = document.getElementById("chat-clear");
 
 const appState = {
   serverInfo: null,
@@ -44,6 +45,7 @@ const appState = {
   reconnectTimer: null,
   reconnectAttempts: 0,
   reconnectGeneration: 0,
+  assistantAudioObjectUrls: new Set(),
 };
 
 const RECONNECT_MIN_DELAY_MS = 1_000;
@@ -170,6 +172,40 @@ function appendChatMessage(role, text) {
   chatLogEl.append(line);
 }
 
+function trackAssistantAudioObjectUrl(objectUrl) {
+  appState.assistantAudioObjectUrls.add(objectUrl);
+}
+
+function revokeAssistantAudioObjectUrls() {
+  for (const objectUrl of appState.assistantAudioObjectUrls) {
+    URL.revokeObjectURL(objectUrl);
+  }
+  appState.assistantAudioObjectUrls.clear();
+}
+
+function clearLocalChat() {
+  revokeAssistantAudioObjectUrls();
+  chatLogEl.replaceChildren();
+}
+
+function appendAssistantAudioMessage(objectUrl) {
+  const line = document.createElement("div");
+  line.className = "chat-line chat-line-assistant chat-line-audio";
+
+  const label = document.createElement("div");
+  label.className = "chat-audio-label";
+  label.textContent = "Bryti: [Voice reply]";
+
+  const player = document.createElement("audio");
+  player.className = "chat-audio-player";
+  player.controls = true;
+  player.preload = "none";
+  player.src = objectUrl;
+
+  line.append(label, player);
+  chatLogEl.append(line);
+}
+
 function stopRecordingStream() {
   if (appState.mediaStream) {
     for (const track of appState.mediaStream.getTracks()) {
@@ -195,7 +231,68 @@ function resetRecordingState() {
   appState.recordingMimeType = "";
 }
 
-async function decryptTextFrame(s2cKey, frame) {
+function base64ToBytes(text) {
+  if (typeof text !== "string" || !text) {
+    throw new Error("Encrypted audio payload is empty");
+  }
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function assertValidInboundPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Invalid encrypted payload");
+  }
+  if (payload.kind === "text") {
+    if (typeof payload.text !== "string") {
+      throw new Error("Invalid encrypted payload");
+    }
+    const trimmed = payload.text.trim();
+    if (!trimmed) {
+      throw new Error("Encrypted text payload is empty");
+    }
+    if (trimmed.length > 10_000) {
+      throw new Error("Encrypted text payload exceeds 10000 characters");
+    }
+    return { kind: "text", text: payload.text };
+  }
+  if (payload.kind === "audio") {
+    if (typeof payload.mimeType !== "string" || !WEB_E2EE_AUDIO_MIME_TYPES.includes(payload.mimeType)) {
+      throw new Error("Invalid encrypted audio payload mimeType");
+    }
+    if (typeof payload.dataBase64 !== "string" || !payload.dataBase64) {
+      throw new Error("Encrypted audio payload is empty");
+    }
+    const bytes = base64ToBytes(payload.dataBase64);
+    if (!(bytes.byteLength > 0)) {
+      throw new Error("Encrypted audio payload is empty");
+    }
+    if (bytes.byteLength > WEB_E2EE_MAX_AUDIO_BYTES) {
+      throw new Error(`Encrypted audio payload exceeds ${WEB_E2EE_MAX_AUDIO_BYTES} bytes`);
+    }
+    if (payload.durationSeconds !== undefined && typeof payload.durationSeconds !== "number") {
+      throw new Error("Invalid encrypted audio payload durationSeconds");
+    }
+    if (payload.fileName !== undefined && typeof payload.fileName !== "string") {
+      throw new Error("Invalid encrypted audio payload fileName");
+    }
+    return {
+      kind: "audio",
+      mimeType: payload.mimeType,
+      dataBase64: payload.dataBase64,
+      durationSeconds: payload.durationSeconds,
+      fileName: payload.fileName,
+      bytes,
+    };
+  }
+  throw new Error("Invalid encrypted payload");
+}
+
+async function decryptInboundFramePayload(s2cKey, frame) {
   const plaintext = await crypto.subtle.decrypt(
     {
       name: "AES-GCM",
@@ -206,17 +303,7 @@ async function decryptTextFrame(s2cKey, frame) {
     base64UrlToBytes(frame.ciphertext),
   );
   const payload = JSON.parse(new TextDecoder().decode(plaintext));
-  if (!payload || payload.kind !== "text" || typeof payload.text !== "string") {
-    throw new Error("Invalid encrypted payload");
-  }
-  const trimmed = payload.text.trim();
-  if (!trimmed) {
-    throw new Error("Encrypted text payload is empty");
-  }
-  if (trimmed.length > 10_000) {
-    throw new Error("Encrypted text payload exceeds 10000 characters");
-  }
-  return { kind: "text", text: payload.text };
+  return assertValidInboundPayload(payload);
 }
 
 function assertValidInboundFrame(frame) {
@@ -386,14 +473,22 @@ async function handleInboundEncryptedFrame(frame) {
     throw new Error("Encrypted frame replay detected");
   }
 
-  const payload = await decryptTextFrame(appState.derivedKeys.s2cKey, validFrame);
+  const payload = await decryptInboundFramePayload(appState.derivedKeys.s2cKey, validFrame);
   const nextState = {
     ...appState.pairedState,
     lastInboundCounter: validFrame.counter,
   };
   await savePairedState(nextState);
   appState.pairedState = nextState;
-  appendChatMessage("assistant", payload.text);
+
+  if (payload.kind === "text") {
+    appendChatMessage("assistant", payload.text);
+    return;
+  }
+
+  const objectUrl = URL.createObjectURL(new Blob([payload.bytes], { type: payload.mimeType }));
+  trackAssistantAudioObjectUrl(objectUrl);
+  appendAssistantAudioMessage(objectUrl);
 }
 
 function clearReconnectTimer() {
@@ -797,6 +892,9 @@ async function init() {
   recordStopEl.addEventListener("click", () => {
     void stopRecording();
   });
+  chatClearEl?.addEventListener("click", () => {
+    clearLocalChat();
+  });
   chatInputEl.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !chatSendEl.disabled) {
       event.preventDefault();
@@ -804,6 +902,10 @@ async function init() {
     }
   });
 }
+
+window.addEventListener("beforeunload", () => {
+  revokeAssistantAudioObjectUrls();
+});
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {

@@ -74,6 +74,7 @@ function securityHeaders(publicOrigin: string): Record<string, string> {
       "script-src 'self'",
       "style-src 'self'",
       "img-src 'self' data:",
+      "media-src 'self' blob:",
       "manifest-src 'self'",
       "worker-src 'self'",
     ].join("; "),

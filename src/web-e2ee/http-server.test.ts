@@ -94,6 +94,7 @@ describe("WebE2EEHttpServer", () => {
     expect(response.headers.get("cross-origin-opener-policy")).toBe("same-origin");
     expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
     expect(response.headers.get("permissions-policy")).toBe("camera=(), microphone=(self), geolocation=()");
+    expect(response.headers.get("content-security-policy")).toContain("media-src 'self' blob:");
     expect(body).toContain("Bryti web_e2ee");
   });
 

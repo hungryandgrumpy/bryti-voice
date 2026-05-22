@@ -55,7 +55,10 @@
       </section>
 
       <section class="card card-chat">
-        <h2>Chat</h2>
+        <div class="chat-header">
+          <h2>Chat</h2>
+          <button id="chat-clear" type="button">Clear local chat</button>
+        </div>
         <div id="chat-log" class="chat-log" aria-live="polite"></div>
         <input id="chat-input" type="text" placeholder="Pair and connect to enable encrypted outbound text" disabled>
         <button id="chat-send" type="button" disabled>Send</button>
