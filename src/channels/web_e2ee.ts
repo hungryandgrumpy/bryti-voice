@@ -1,20 +1,119 @@
-// src/channels/web_e2ee.ts   
+// src/channels/web_e2ee.ts
+import fs from "node:fs";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { loadOrCreateServerKeyPair } from "../web-e2ee/server-key-store.js";
 import { createDeviceStore } from "../web-e2ee/device-store.js";
 import { createInviteStore } from "../web-e2ee/invite-store.js";
-import { assertValidPublicX25519Jwk, generateDeviceId, importPublicKeyJwk, fingerprintPublicKey } from "../web-e2ee/crypto.js";
+import {
+  assertValidPublicX25519Jwk,
+  generateDeviceId,
+  importPublicKeyJwk,
+  fingerprintPublicKey,
+} from "../web-e2ee/crypto.js";
 import { WebE2EEHttpServer } from "../web-e2ee/http-server.js";
 import { WebE2EEWsServer } from "../web-e2ee/ws-server.js";
-import type { PairingCompleteRequest } from "../web-e2ee/protocol.js";
-import type { ApprovalResult, ChannelBridge, IncomingMessage, SendOpts } from "./types.js";
+import {
+  WEB_E2EE_MAX_AUDIO_BYTES,
+  type DecryptedMessageEvent,
+  type PairingCompleteRequest,
+  type WebE2EEAudioMimeType,
+} from "../web-e2ee/protocol.js";
+import type { ApprovalResult, AudioAttachment, ChannelBridge, IncomingMessage, SendOpts } from "./types.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
+const AUDIO_EXTENSION_BY_MIME: Record<WebE2EEAudioMimeType, string> = {
+  "audio/webm": ".webm",
+  "audio/webm;codecs=opus": ".webm",
+  "audio/ogg": ".ogg",
+  "audio/opus": ".opus",
+};
+const WEB_E2EE_VOICE_PLACEHOLDER = "The user sent a voice message.";
+const MAX_CLIENT_FILENAME_LENGTH = 120;
+
+function ensureIncomingAudioDir(dataDir: string): string {
+  const dir = path.join(dataDir, "files", "voice");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function sanitizeClientFileName(fileName: string | undefined): string | undefined {
+  if (typeof fileName !== "string") {
+    return undefined;
+  }
+  const normalized = fileName.normalize("NFKC");
+  const trimmed = normalized.trim();
+  if (!trimmed || trimmed.includes("/") || trimmed.includes("\\")) {
+    return undefined;
+  }
+  const stripped = trimmed
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[^A-Za-z0-9._ ()+-]/g, "_")
+    .trim();
+  if (!stripped || stripped === "." || stripped === "..") {
+    return undefined;
+  }
+  return stripped.slice(0, MAX_CLIENT_FILENAME_LENGTH);
+}
+
+function decodeAudioBase64(dataBase64: string): Buffer {
+  if (!dataBase64 || dataBase64.length === 0) {
+    throw new Error("Encrypted audio payload is empty");
+  }
+  const bytes = Buffer.from(dataBase64, "base64");
+  if (bytes.length <= 0) {
+    throw new Error("Encrypted audio payload is empty");
+  }
+  if (bytes.length > WEB_E2EE_MAX_AUDIO_BYTES) {
+    throw new Error(`Encrypted audio payload exceeds ${WEB_E2EE_MAX_AUDIO_BYTES} bytes`);
+  }
+  return bytes;
+}
+
+function writeIncomingAudioAttachment(
+  dataDir: string,
+  payload: Extract<DecryptedMessageEvent["payload"], { kind: "audio" }>,
+): AudioAttachment {
+  const ext = AUDIO_EXTENSION_BY_MIME[payload.mimeType];
+  const dir = ensureIncomingAudioDir(dataDir);
+  const filePath = path.join(dir, `web-e2ee-${Date.now()}-${randomUUID()}${ext}`);
+  const bytes = decodeAudioBase64(payload.dataBase64);
+  fs.writeFileSync(filePath, bytes);
+  return {
+    path: filePath,
+    mimeType: payload.mimeType,
+    fileName: sanitizeClientFileName(payload.fileName),
+    durationSeconds: payload.durationSeconds,
+  };
+}
+
+function mapDecryptedEventToIncomingMessage(dataDir: string, event: DecryptedMessageEvent): IncomingMessage {
+  if (event.payload.kind === "text") {
+    return {
+      channelId: event.deviceId,
+      userId: event.deviceId,
+      messageId: event.messageId,
+      text: event.payload.text,
+      platform: "web_e2ee",
+      raw: event.raw,
+    };
+  }
+
+  return {
+    channelId: event.deviceId,
+    userId: event.deviceId,
+    messageId: event.messageId,
+    text: WEB_E2EE_VOICE_PLACEHOLDER,
+    platform: "web_e2ee",
+    raw: event.raw,
+    audio: [writeIncomingAudioAttachment(dataDir, event.payload)],
+  };
+}
+
 /**
  * Self-hosted web_e2ee channel bridge.
- *
- * Slice 4c supports encrypted text roundtrips over WebSocket for already paired
- * devices. Richer outbound semantics remain intentionally unimplemented.
  */
 export class WebE2EEBridge implements ChannelBridge {
   readonly name = "web_e2ee";
@@ -54,7 +153,7 @@ export class WebE2EEBridge implements ChannelBridge {
       serverInfo: {
         channel: "web_e2ee",
         protocolVersion: 1,
-        designVersion: "slice4c-encrypted-text-roundtrip",
+        designVersion: "slice7b-browser-audio-input",
         serverPublicFingerprint: serverKeys.fingerprint,
         pathPrefix: this.config.path_prefix,
         pairingEnabled: this.config.pairing.invite_ttl_minutes > 0,
@@ -107,13 +206,7 @@ export class WebE2EEBridge implements ChannelBridge {
           if (!this.handler) {
             return;
           }
-          await this.handler({
-            channelId: event.deviceId,
-            userId: event.deviceId,
-            text: event.payload.text,
-            platform: "web_e2ee",
-            raw: event.raw,
-          });
+          await this.handler(mapDecryptedEventToIncomingMessage(this.dataDir, event));
         },
       });
     } catch (error) {

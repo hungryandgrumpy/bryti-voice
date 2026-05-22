@@ -63,7 +63,7 @@ function securityHeaders(publicOrigin: string): Record<string, string> {
     "Referrer-Policy": "no-referrer",
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Permissions-Policy": "camera=(), microphone=(self), geolocation=()",
     "Content-Security-Policy": [
       "default-src 'self'",
       "base-uri 'none'",

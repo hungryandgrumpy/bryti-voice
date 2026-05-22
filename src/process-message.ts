@@ -193,10 +193,12 @@ async function prepareVoiceMessage(state: AppState, msg: IncomingMessage): Promi
 
   const bridge = getBridge(state, msg.platform);
   if (!state.config.voice?.enabled) {
+    cleanupIncomingAudioFiles(state, msg.audio);
     await bridge.sendMessage(msg.channelId, "Voice messages are not enabled. Please send text instead.");
     return null;
   }
   if (!state.voiceService) {
+    cleanupIncomingAudioFiles(state, msg.audio);
     await bridge.sendMessage(msg.channelId, "Voice support is enabled but unavailable. Please send text instead.");
     return null;
   }

@@ -20,6 +20,9 @@ const inviteCodeEl = document.getElementById("invite-code");
 const pairButtonEl = document.getElementById("pair-button");
 const chatInputEl = document.getElementById("chat-input");
 const chatSendEl = document.getElementById("chat-send");
+const recordStartEl = document.getElementById("record-start");
+const recordStopEl = document.getElementById("record-stop");
+const recordingStatusEl = document.getElementById("recording-status");
 const chatLogEl = document.getElementById("chat-log");
 
 const appState = {
@@ -30,6 +33,13 @@ const appState = {
   ws: null,
   wsConnected: false,
   sendingText: false,
+  sendingAudio: false,
+  mediaRecorder: null,
+  mediaStream: null,
+  recordingChunks: [],
+  recordingMimeType: "",
+  recordingStartedAt: 0,
+  recordingStopTimer: null,
   reconnectTimer: null,
   reconnectAttempts: 0,
   reconnectGeneration: 0,
@@ -37,6 +47,14 @@ const appState = {
 
 const RECONNECT_MIN_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 15_000;
+const WEB_E2EE_MAX_AUDIO_DURATION_SECONDS = 60;
+const WEB_E2EE_MAX_AUDIO_BYTES = 2 * 1024 * 1024;
+const WEB_E2EE_AUDIO_MIME_TYPES = [
+  "audio/webm;codecs=opus",
+  "audio/webm",
+  "audio/ogg",
+  "audio/opus",
+];
 const BIND_ERROR_CODES = new Set(["invalid_frame", "unknown_device", "revoked_device", "replay_detected", "decrypt_failed"]);
 
 function supportsRequiredCrypto() {
@@ -47,27 +65,59 @@ function supportsRequiredCrypto() {
   );
 }
 
+function supportsMediaRecorder() {
+  return !!(
+    navigator.mediaDevices?.getUserMedia &&
+    typeof MediaRecorder !== "undefined"
+  );
+}
+
+function supportedRecordingMimeType() {
+  if (!supportsMediaRecorder()) {
+    return "";
+  }
+  for (const mimeType of WEB_E2EE_AUDIO_MIME_TYPES) {
+    if (typeof MediaRecorder.isTypeSupported !== "function" || MediaRecorder.isTypeSupported(mimeType)) {
+      return mimeType;
+    }
+  }
+  return "";
+}
+
 function updateChatAvailability() {
-  const enabled = !!(
+  const connected = !!(
     appState.pairedState &&
     appState.devicePrivateKey &&
     appState.wsConnected &&
-    appState.derivedKeys &&
-    !appState.sendingText
+    appState.derivedKeys
   );
-  chatInputEl.disabled = !enabled;
-  chatSendEl.disabled = !enabled;
-  chatInputEl.placeholder = enabled
+  const textEnabled = connected && !appState.sendingText && !appState.sendingAudio && !appState.mediaRecorder;
+  const audioSupported = !!supportedRecordingMimeType();
+  const canStartRecording = connected && audioSupported && !appState.sendingText && !appState.sendingAudio && !appState.mediaRecorder;
+  const canStopRecording = !!appState.mediaRecorder;
+
+  chatInputEl.disabled = !textEnabled;
+  chatSendEl.disabled = !textEnabled;
+  recordStartEl.disabled = !canStartRecording;
+  recordStopEl.disabled = !canStopRecording;
+  chatInputEl.placeholder = textEnabled
     ? "Send encrypted text to Bryti"
     : "Pair and connect to enable encrypted outbound text";
+  if (!audioSupported) {
+    recordingStatusEl.textContent = "Browser audio input is unavailable in this browser.";
+  }
 }
 
-function bytesToBase64Url(bytes) {
+function bytesToBase64(bytes) {
   let binary = "";
   for (const byte of bytes) {
     binary += String.fromCharCode(byte);
   }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return btoa(binary);
+}
+
+function bytesToBase64Url(bytes) {
+  return bytesToBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 function base64UrlToBytes(text) {
@@ -112,6 +162,31 @@ function appendChatMessage(role, text) {
   line.className = `chat-line chat-line-${role}`;
   line.textContent = `${role === "user" ? "You" : "Bryti"}: ${text}`;
   chatLogEl.append(line);
+}
+
+function stopRecordingStream() {
+  if (appState.mediaStream) {
+    for (const track of appState.mediaStream.getTracks()) {
+      track.stop();
+    }
+    appState.mediaStream = null;
+  }
+}
+
+function clearRecordingStopTimer() {
+  if (appState.recordingStopTimer) {
+    clearTimeout(appState.recordingStopTimer);
+    appState.recordingStopTimer = null;
+  }
+}
+
+function resetRecordingState() {
+  clearRecordingStopTimer();
+  stopRecordingStream();
+  appState.mediaRecorder = null;
+  appState.recordingChunks = [];
+  appState.recordingStartedAt = 0;
+  appState.recordingMimeType = "";
 }
 
 async function decryptTextFrame(s2cKey, frame) {
@@ -555,6 +630,127 @@ async function sendEncryptedText() {
   }
 }
 
+function recordingDurationSeconds() {
+  if (!appState.recordingStartedAt) {
+    return 0;
+  }
+  return Math.max(1, Math.round((Date.now() - appState.recordingStartedAt) / 1000));
+}
+
+async function sendEncryptedAudioBlob(blob, durationSeconds, mimeType) {
+  if (!appState.wsConnected) {
+    throw new Error("Pair and connect before sending browser audio.");
+  }
+  if (!(blob.size > 0)) {
+    throw new Error("Recorded audio is empty.");
+  }
+  if (blob.size > WEB_E2EE_MAX_AUDIO_BYTES) {
+    throw new Error(`Recorded audio exceeds ${WEB_E2EE_MAX_AUDIO_BYTES} bytes.`);
+  }
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  await sendReservedEncryptedFrame("msg", {
+    kind: "audio",
+    mimeType,
+    durationSeconds,
+    dataBase64: bytesToBase64(bytes),
+    fileName: `recording${mimeType.includes("ogg") ? ".ogg" : mimeType.includes("opus") ? ".opus" : ".webm"}`,
+  });
+}
+
+async function startRecording() {
+  if (appState.mediaRecorder || appState.sendingAudio) {
+    return;
+  }
+  if (!supportsMediaRecorder()) {
+    recordingStatusEl.textContent = "Browser audio input is unavailable in this browser.";
+    return;
+  }
+  if (!appState.wsConnected || !appState.pairedState || !appState.derivedKeys) {
+    pairingMessageEl.textContent = "Pair and connect before recording browser audio.";
+    return;
+  }
+
+  const mimeType = supportedRecordingMimeType();
+  if (!mimeType) {
+    recordingStatusEl.textContent = "This browser does not support the allowed recording formats.";
+    updateChatAvailability();
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const recorder = new MediaRecorder(stream, { mimeType });
+    appState.mediaStream = stream;
+    appState.mediaRecorder = recorder;
+    appState.recordingChunks = [];
+    appState.recordingMimeType = mimeType;
+    appState.recordingStartedAt = Date.now();
+    recordingStatusEl.textContent = "Recording… tap Stop to send. Max 60 seconds.";
+    clearRecordingStopTimer();
+    appState.recordingStopTimer = window.setTimeout(() => {
+      recordingStatusEl.textContent = "Recording stopped at 60 seconds. Sending…";
+      void stopRecording();
+    }, WEB_E2EE_MAX_AUDIO_DURATION_SECONDS * 1000);
+
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data && event.data.size > 0) {
+        appState.recordingChunks.push(event.data);
+      }
+    });
+
+    recorder.addEventListener("stop", () => {
+      void (async () => {
+        const chunks = appState.recordingChunks.slice();
+        const durationSeconds = Math.min(recordingDurationSeconds(), WEB_E2EE_MAX_AUDIO_DURATION_SECONDS);
+        const recordedMimeType = appState.recordingMimeType || mimeType;
+        resetRecordingState();
+        updateChatAvailability();
+        if (chunks.length === 0) {
+          recordingStatusEl.textContent = "No audio captured.";
+          return;
+        }
+
+        appState.sendingAudio = true;
+        updateChatAvailability();
+        recordingStatusEl.textContent = "Sending recorded audio…";
+        try {
+          const blob = new Blob(chunks, { type: recordedMimeType });
+          await sendEncryptedAudioBlob(blob, durationSeconds, recordedMimeType);
+          appendChatMessage("user", `[Voice message: ${durationSeconds}s]`);
+          recordingStatusEl.textContent = `Voice message sent (${durationSeconds}s).`;
+          pairingMessageEl.textContent = "Encrypted text roundtrip is enabled.";
+        } catch (error) {
+          recordingStatusEl.textContent = error instanceof Error ? error.message : String(error);
+          pairingMessageEl.textContent = error instanceof Error ? error.message : String(error);
+        } finally {
+          appState.sendingAudio = false;
+          updateChatAvailability();
+        }
+      })();
+    });
+
+    recorder.start();
+    updateChatAvailability();
+  } catch (error) {
+    resetRecordingState();
+    recordingStatusEl.textContent = error instanceof Error ? error.message : String(error);
+    updateChatAvailability();
+  }
+}
+
+async function stopRecording() {
+  const recorder = appState.mediaRecorder;
+  if (!recorder) {
+    return;
+  }
+  clearRecordingStopTimer();
+  if (recorder.state !== "inactive") {
+    recorder.stop();
+  }
+  recordingStatusEl.textContent = "Stopping recording…";
+  updateChatAvailability();
+}
+
 async function init() {
   if (!supportsRequiredCrypto()) {
     pairingMessageEl.textContent = "This browser is not supported. Use a current Chromium-based browser.";
@@ -572,6 +768,11 @@ async function init() {
   if (restored) {
     connectWebSocket(restored.pathPrefix || info.pathPrefix);
   }
+  if (!supportsMediaRecorder()) {
+    recordingStatusEl.textContent = "Browser audio input requires MediaRecorder microphone support.";
+  } else if (!supportedRecordingMimeType()) {
+    recordingStatusEl.textContent = "This browser does not support the allowed recording formats.";
+  }
   updateChatAvailability();
 
   pairButtonEl.addEventListener("click", () => {
@@ -579,6 +780,12 @@ async function init() {
   });
   chatSendEl.addEventListener("click", () => {
     void sendEncryptedText();
+  });
+  recordStartEl.addEventListener("click", () => {
+    void startRecording();
+  });
+  recordStopEl.addEventListener("click", () => {
+    void stopRecording();
   });
   chatInputEl.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !chatSendEl.disabled) {

@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  WEB_E2EE_MAX_AUDIO_BASE64_LENGTH,
+  WEB_E2EE_MAX_AUDIO_BYTES,
+  assertValidEncryptedAudioPayload,
   assertValidEncryptedBindPayload,
   assertValidEncryptedFrame,
   assertValidEncryptedTextPayload,
   assertValidPairingCompleteRequest,
   canonicalFrameHeaderJson,
+  decodedBase64ByteLength,
   sanitizeDeviceLabel,
 } from "./protocol.js";
 
@@ -61,7 +65,7 @@ describe("web-e2ee protocol", () => {
     expect(json).not.toContain("ciphertext");
   });
 
-  it("accepts encrypted msg/bind frames and payloads", () => {
+  it("accepts encrypted msg/bind frames and text payloads", () => {
     expect(assertValidEncryptedFrame({
       v: 1,
       kind: "msg",
@@ -88,6 +92,20 @@ describe("web-e2ee protocol", () => {
     expect(assertValidEncryptedBindPayload({ kind: "bind" }).kind).toBe("bind");
   });
 
+  it("accepts valid encrypted audio payloads", () => {
+    const payload = assertValidEncryptedAudioPayload({
+      kind: "audio",
+      mimeType: "audio/ogg",
+      durationSeconds: 12,
+      fileName: "clip.ogg",
+      dataBase64: Buffer.from("voice bytes").toString("base64"),
+    });
+
+    expect(payload.mimeType).toBe("audio/ogg");
+    expect(payload.durationSeconds).toBe(12);
+    expect(decodedBase64ByteLength(payload.dataBase64)).toBe(Buffer.byteLength("voice bytes"));
+  });
+
   it("rejects malformed encrypted frames and invalid payloads", () => {
     expect(() => assertValidEncryptedFrame({ kind: "msg" })).toThrow("Invalid encrypted frame version");
     expect(() => assertValidEncryptedTextPayload({ kind: "text", text: "   " })).toThrow(
@@ -96,5 +114,38 @@ describe("web-e2ee protocol", () => {
     expect(() => assertValidEncryptedBindPayload({ kind: "bind", text: "nope" })).toThrow(
       "Invalid encrypted bind payload",
     );
+  });
+
+  it("rejects empty, oversized, and invalid encrypted audio payloads", () => {
+    expect(() => assertValidEncryptedAudioPayload({
+      kind: "audio",
+      mimeType: "audio/ogg",
+      dataBase64: "",
+    })).toThrow("Encrypted audio payload is empty");
+
+    expect(() => assertValidEncryptedAudioPayload({
+      kind: "audio",
+      mimeType: "audio/ogg",
+      dataBase64: "%%%",
+    })).toThrow("Invalid encrypted audio payload dataBase64");
+
+    expect(() => assertValidEncryptedAudioPayload({
+      kind: "audio",
+      mimeType: "audio/ogg",
+      durationSeconds: 61,
+      dataBase64: Buffer.from("voice bytes").toString("base64"),
+    })).toThrow("Invalid encrypted audio payload durationSeconds");
+
+    expect(() => assertValidEncryptedAudioPayload({
+      kind: "audio",
+      mimeType: "audio/wav",
+      dataBase64: Buffer.from("voice bytes").toString("base64"),
+    })).toThrow("Invalid encrypted audio payload mimeType");
+
+    expect(() => assertValidEncryptedAudioPayload({
+      kind: "audio",
+      mimeType: "audio/ogg",
+      dataBase64: "A".repeat(WEB_E2EE_MAX_AUDIO_BASE64_LENGTH + 1),
+    })).toThrow(`Encrypted audio payload exceeds ${WEB_E2EE_MAX_AUDIO_BYTES} bytes`);
   });
 });

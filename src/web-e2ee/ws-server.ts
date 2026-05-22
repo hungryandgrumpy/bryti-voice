@@ -15,11 +15,14 @@ import {
 import { bytesToBase64Url } from "./encoding.js";
 import { normalizePathPrefix, prefixedPath } from "./path-utils.js";
 import {
+  assertValidEncryptedAudioPayload,
   assertValidEncryptedBindPayload,
   assertValidEncryptedFrame,
   assertValidEncryptedTextPayload,
   canonicalFrameHeader,
-  type DecryptedTextMessageEvent,
+  type DecryptedMessageEvent,
+  type EncryptedAudioPayload,
+  type EncryptedTextPayload,
 } from "./protocol.js";
 import type { LoadedServerKeyPair } from "./types.js";
 
@@ -28,7 +31,7 @@ export interface WebE2EEWsServerOptions {
   allowedOrigins: string[];
   deviceStore: DeviceStore;
   serverKeys: LoadedServerKeyPair;
-  onDecryptedMessage?: (event: DecryptedTextMessageEvent) => Promise<void> | void;
+  onDecryptedMessage?: (event: DecryptedMessageEvent) => Promise<void> | void;
 }
 
 interface BasicFrame {
@@ -244,12 +247,12 @@ export class WebE2EEWsServer {
       return;
     }
 
-    let payload: ReturnType<typeof assertValidEncryptedTextPayload> | null = null;
+    let payload: EncryptedTextPayload | EncryptedAudioPayload | null = null;
     try {
       if (frame.kind === "bind") {
         assertValidEncryptedBindPayload(decrypted);
       } else {
-        payload = assertValidEncryptedTextPayload(decrypted);
+        payload = this.assertValidMessagePayload(decrypted);
       }
       this.bindSocket(frame.deviceId, socket);
       this.options.deviceStore.updateLastInboundCounter(frame.deviceId, frame.counter, new Date().toISOString());
@@ -266,27 +269,54 @@ export class WebE2EEWsServer {
       return;
     }
 
+    const raw = {
+      type: "web_e2ee_encrypted_msg" as const,
+      deviceId: frame.deviceId,
+      messageId: frame.messageId,
+      counter: frame.counter,
+      ts: frame.ts,
+      kind: "msg" as const,
+      nonceLength: frame.nonce.length,
+      ciphertextLength: frame.ciphertext.length,
+    };
+
     try {
-      await this.options.onDecryptedMessage?.({
-        deviceId: frame.deviceId,
-        messageId: frame.messageId,
-        counter: frame.counter,
-        ts: frame.ts,
-        payload,
-        raw: {
-          type: "web_e2ee_encrypted_msg",
+      if (payload.kind === "text") {
+        await this.options.onDecryptedMessage?.({
           deviceId: frame.deviceId,
           messageId: frame.messageId,
           counter: frame.counter,
           ts: frame.ts,
-          kind: "msg",
-          nonceLength: frame.nonce.length,
-          ciphertextLength: frame.ciphertext.length,
-        },
-      });
+          payload,
+          raw,
+        });
+      } else {
+        await this.options.onDecryptedMessage?.({
+          deviceId: frame.deviceId,
+          messageId: frame.messageId,
+          counter: frame.counter,
+          ts: frame.ts,
+          payload,
+          raw,
+        });
+      }
     } catch {
       this.sendJson(socket, { kind: "error", code: "handler_failed" });
     }
+  }
+
+  private assertValidMessagePayload(decrypted: unknown): EncryptedTextPayload | EncryptedAudioPayload {
+    if (!decrypted || typeof decrypted !== "object" || Array.isArray(decrypted)) {
+      throw new Error("Invalid encrypted payload");
+    }
+    const raw = decrypted as { kind?: unknown };
+    if (raw.kind === "text") {
+      return assertValidEncryptedTextPayload(decrypted);
+    }
+    if (raw.kind === "audio") {
+      return assertValidEncryptedAudioPayload(decrypted);
+    }
+    throw new Error("Invalid encrypted payload kind");
   }
 
   private bindSocket(deviceId: string, socket: WebSocket): void {

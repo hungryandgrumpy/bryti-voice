@@ -368,6 +368,49 @@ describe("processMessage pipeline", () => {
     expect(bridge.sent[0].text).toBe("Fallback text");
   });
 
+  it("cleans incoming audio temp files when voice is disabled", async () => {
+    config.voice!.enabled = false;
+
+    const inputPath = path.join(tmpDir, "incoming-disabled.ogg");
+    fs.writeFileSync(inputPath, "voice bytes");
+
+    const session = makeUserSession("12345", []);
+    const state = makeState(config, session, tmpDir);
+    const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
+
+    await processMessage(state, {
+      ...incomingMsg("The user sent a voice message."),
+      audio: [{ path: inputPath, mimeType: "audio/ogg" }],
+      replyMode: "voice",
+    });
+
+    expect(bridge.sent).toHaveLength(1);
+    expect(bridge.sent[0].text).toContain("Voice messages are not enabled");
+    expect(fs.existsSync(inputPath)).toBe(false);
+  });
+
+  it("cleans incoming audio temp files when voice service is unavailable", async () => {
+    config.voice!.enabled = true;
+
+    const inputPath = path.join(tmpDir, "incoming-unavailable.ogg");
+    fs.writeFileSync(inputPath, "voice bytes");
+
+    const session = makeUserSession("12345", []);
+    const state = makeState(config, session, tmpDir);
+    const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
+    state.voiceService = null;
+
+    await processMessage(state, {
+      ...incomingMsg("The user sent a voice message."),
+      audio: [{ path: inputPath, mimeType: "audio/ogg" }],
+      replyMode: "voice",
+    });
+
+    expect(bridge.sent).toHaveLength(1);
+    expect(bridge.sent[0].text).toContain("Voice support is enabled but unavailable");
+    expect(fs.existsSync(inputPath)).toBe(false);
+  });
+
   it("keeps temp files when keep_temp_files is true", async () => {
     config.voice!.enabled = true;
     config.voice!.keep_temp_files = true;

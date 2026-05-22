@@ -113,7 +113,10 @@ async function nextJsonMessage(ws: WebSocket): Promise<Record<string, unknown>> 
 async function makeEncryptedFrame(
   counter: number,
   kind: "msg" | "bind",
-  payload: { kind: "text"; text: string } | { kind: "bind" },
+  payload:
+    | { kind: "text"; text: string }
+    | { kind: "audio"; mimeType: "audio/ogg" | "audio/webm"; dataBase64: string; durationSeconds?: number; fileName?: string }
+    | { kind: "bind" },
   devicePair: CryptoKeyPair,
   serverPublicKey: CryptoKey,
 ) {
@@ -258,6 +261,66 @@ describe("WebE2EEWsServer", () => {
     }));
     expect(created.deviceStore.get("wed_test")?.lastInboundCounter).toBe(1);
 
+    ws.close();
+  });
+
+  it("accepts a valid encrypted audio frame from a paired device", async () => {
+    const created = await createServers("/");
+    tempDirs.push(created.tempDir);
+    servers.push(created);
+    const { devicePair } = await registerDevice(created.deviceStore);
+    const { ws } = await connectWebSocketWithHello(
+      `${created.httpServer.getBaseUrl().replace("http", "ws")}/ws`,
+      "https://chat.example.test",
+    );
+
+    ws.send(JSON.stringify(await makeEncryptedFrame(1, "msg", {
+      kind: "audio",
+      mimeType: "audio/ogg",
+      durationSeconds: 5,
+      fileName: "clip.ogg",
+      dataBase64: Buffer.from("voice bytes").toString("base64"),
+    }, devicePair, created.serverKeys.publicKey)));
+    await vi.waitFor(() => {
+      expect(created.onDecryptedMessage).toHaveBeenCalledTimes(1);
+    });
+
+    expect(created.onDecryptedMessage).toHaveBeenCalledWith(expect.objectContaining({
+      deviceId: "wed_test",
+      messageId: "msg_1",
+      counter: 1,
+      payload: expect.objectContaining({
+        kind: "audio",
+        mimeType: "audio/ogg",
+        durationSeconds: 5,
+        fileName: "clip.ogg",
+      }),
+    }));
+    expect(created.deviceStore.get("wed_test")?.lastInboundCounter).toBe(1);
+
+    ws.close();
+  });
+
+  it("rejects oversized encrypted audio payloads before handler dispatch", async () => {
+    const created = await createServers("/");
+    tempDirs.push(created.tempDir);
+    servers.push(created);
+    const { devicePair } = await registerDevice(created.deviceStore);
+    const { ws } = await connectWebSocketWithHello(
+      `${created.httpServer.getBaseUrl().replace("http", "ws")}/ws`,
+      "https://chat.example.test",
+    );
+
+    ws.send(JSON.stringify(await makeEncryptedFrame(1, "msg", {
+      kind: "audio",
+      mimeType: "audio/ogg",
+      dataBase64: "A".repeat((4 * Math.ceil((2 * 1024 * 1024) / 3)) + 1),
+    }, devicePair, created.serverKeys.publicKey)));
+    const error = await nextJsonMessage(ws);
+
+    expect(error).toMatchObject({ kind: "error", code: "decrypt_failed" });
+    expect(created.onDecryptedMessage).not.toHaveBeenCalled();
+    expect(created.deviceStore.get("wed_test")?.lastInboundCounter).toBe(0);
     ws.close();
   });
 

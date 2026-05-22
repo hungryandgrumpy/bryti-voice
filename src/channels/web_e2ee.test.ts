@@ -79,7 +79,13 @@ describe("WebE2EEBridge", () => {
     return devicePair;
   }
 
-  async function makeEncryptedFrame(counter: number, text: string, devicePair: CryptoKeyPair) {
+  async function makeEncryptedFrame(
+    counter: number,
+    payload:
+      | { kind: "text"; text: string }
+      | { kind: "audio"; mimeType: "audio/ogg" | "audio/webm"; dataBase64: string; durationSeconds?: number; fileName?: string },
+    devicePair: CryptoKeyPair,
+  ) {
     const serverKeys = await loadOrCreateServerKeyPair(tempDir);
     const serverPublicRaw = await exportRawPublicKey(serverKeys.publicKey);
     const devicePublicRaw = await exportRawPublicKey(devicePair.publicKey);
@@ -100,7 +106,7 @@ describe("WebE2EEBridge", () => {
     };
     return {
       ...frame,
-      ciphertext: await encryptPayload(c2sKey, frame, { kind: "text", text }),
+      ciphertext: await encryptPayload(c2sKey, frame, payload),
     };
   }
 
@@ -149,7 +155,7 @@ describe("WebE2EEBridge", () => {
       socket.once("error", reject);
     });
 
-    ws.send(JSON.stringify(await makeEncryptedFrame(1, "hello bryti", devicePair)));
+    ws.send(JSON.stringify(await makeEncryptedFrame(1, { kind: "text", text: "hello bryti" }, devicePair)));
     await vi.waitUntil(
       () => handler.mock.calls.length === 1,
       { timeout: 1000, interval: 10 },
@@ -167,6 +173,56 @@ describe("WebE2EEBridge", () => {
         messageId: "msg_1",
       }),
     }));
+
+    ws.close();
+    await bridge.stop();
+  });
+
+  it("maps valid encrypted audio messages to IncomingMessage.audio using a server-generated temp path", async () => {
+    const port = await getAvailablePort();
+    const bridge = makeBridge(port);
+    const devicePair = await registerDevice();
+    const handler = vi.fn(async () => {});
+    bridge.onMessage(handler);
+
+    await bridge.start();
+
+    const ws = await new Promise<WebSocket>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+        headers: { Origin: "https://bryti.tailnet.ts.net" },
+      });
+      socket.once("message", () => resolve(socket));
+      socket.once("error", reject);
+    });
+
+    ws.send(JSON.stringify(await makeEncryptedFrame(1, {
+      kind: "audio",
+      mimeType: "audio/ogg",
+      durationSeconds: 5,
+      fileName: "../clip.ogg",
+      dataBase64: Buffer.from("voice bytes").toString("base64"),
+    }, devicePair)));
+    await vi.waitUntil(
+      () => handler.mock.calls.length === 1,
+      { timeout: 1000, interval: 10 },
+    );
+
+    const msg = handler.mock.calls[0][0];
+    expect(msg).toEqual(expect.objectContaining({
+      channelId: "wed_test",
+      userId: "wed_test",
+      messageId: "msg_1",
+      platform: "web_e2ee",
+      text: "The user sent a voice message.",
+    }));
+    expect(msg.audio).toHaveLength(1);
+    expect(msg.audio[0].mimeType).toBe("audio/ogg");
+    expect(msg.audio[0].durationSeconds).toBe(5);
+    expect(msg.audio[0].fileName).toBeUndefined();
+    expect(fs.existsSync(msg.audio[0].path)).toBe(true);
+    expect(path.basename(msg.audio[0].path)).toMatch(/^web-e2ee-.*\.ogg$/);
+    expect(msg.audio[0].path).toContain(path.join("files", "voice"));
+    expect(fs.readFileSync(msg.audio[0].path, "utf-8")).toBe("voice bytes");
 
     ws.close();
     await bridge.stop();
@@ -234,7 +290,7 @@ describe("WebE2EEBridge", () => {
         }
       });
     });
-    ws.send(JSON.stringify(await makeEncryptedFrame(1, "hello bryti", devicePair)));
+    ws.send(JSON.stringify(await makeEncryptedFrame(1, { kind: "text", text: "hello bryti" }, devicePair)));
     await vi.waitFor(() => {
       expect(handler).toHaveBeenCalledTimes(1);
     });

@@ -11,7 +11,7 @@
   <body>
     <main class="app">
       <h1>Bryti web_e2ee</h1>
-      <p class="lede">Slice 4c: encrypted text roundtrip is enabled for paired devices.</p>
+      <p class="lede">Slice 7b: encrypted text roundtrip plus browser audio input is enabled for paired devices.</p>
 
       <section class="card">
         <h2>Status</h2>
@@ -59,6 +59,11 @@
         <div id="chat-log" class="chat-log" aria-live="polite"></div>
         <input id="chat-input" type="text" placeholder="Pair and connect to enable encrypted outbound text" disabled>
         <button id="chat-send" type="button" disabled>Send</button>
+        <div class="recording-actions">
+          <button id="record-start" type="button" disabled>Record</button>
+          <button id="record-stop" type="button" disabled>Stop</button>
+        </div>
+        <p id="recording-status" class="recording-status">Browser audio input is idle.</p>
       </section>
     </main>
     <script type="module" src="app.js"></script>
