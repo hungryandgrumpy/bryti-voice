@@ -1,8 +1,10 @@
 import {
   loadDevicePrivateKey,
   loadPairedState,
+  loadUiPrefs,
   saveDeviceKeyPair,
   savePairedState,
+  saveUiPrefs,
 } from "./idb.js";
 
 const HKDF_CONTEXT_LABEL = new TextEncoder().encode("bryti/web_e2ee/v1");
@@ -26,6 +28,7 @@ const recordStopEl = document.getElementById("record-stop");
 const recordingStatusEl = document.getElementById("recording-status");
 const chatLogEl = document.getElementById("chat-log");
 const chatClearEl = document.getElementById("chat-clear");
+const autoPlayVoiceRepliesEl = document.getElementById("auto-play-voice-replies");
 
 const appState = {
   serverInfo: null,
@@ -46,6 +49,9 @@ const appState = {
   reconnectAttempts: 0,
   reconnectGeneration: 0,
   assistantAudioObjectUrls: new Set(),
+  uiPrefs: {
+    autoPlayVoiceReplies: false,
+  },
 };
 
 const RECONNECT_MIN_DELAY_MS = 1_000;
@@ -196,14 +202,19 @@ function appendAssistantAudioMessage(objectUrl) {
   label.className = "chat-audio-label";
   label.textContent = "Bryti: [Voice reply]";
 
+  const status = document.createElement("div");
+  status.className = "chat-audio-status";
+  status.textContent = "Tap Play to listen.";
+
   const player = document.createElement("audio");
   player.className = "chat-audio-player";
   player.controls = true;
   player.preload = "none";
   player.src = objectUrl;
 
-  line.append(label, player);
+  line.append(label, status, player);
   chatLogEl.append(line);
+  return { player, status };
 }
 
 function stopRecordingStream() {
@@ -433,6 +444,27 @@ async function loadServerInfo() {
   }
 }
 
+async function restoreUiPrefs() {
+  const uiPrefs = await loadUiPrefs();
+  appState.uiPrefs = {
+    autoPlayVoiceReplies: !!uiPrefs?.autoPlayVoiceReplies,
+  };
+  if (autoPlayVoiceRepliesEl) {
+    autoPlayVoiceRepliesEl.checked = appState.uiPrefs.autoPlayVoiceReplies;
+  }
+}
+
+async function setAutoPlayVoiceReplies(enabled) {
+  const nextPrefs = {
+    autoPlayVoiceReplies: !!enabled,
+  };
+  appState.uiPrefs = nextPrefs;
+  if (autoPlayVoiceRepliesEl) {
+    autoPlayVoiceRepliesEl.checked = nextPrefs.autoPlayVoiceReplies;
+  }
+  await saveUiPrefs(nextPrefs);
+}
+
 async function restorePairedState() {
   const state = await loadPairedState();
   const privateKey = await loadDevicePrivateKey();
@@ -488,7 +520,16 @@ async function handleInboundEncryptedFrame(frame) {
 
   const objectUrl = URL.createObjectURL(new Blob([payload.bytes], { type: payload.mimeType }));
   trackAssistantAudioObjectUrl(objectUrl);
-  appendAssistantAudioMessage(objectUrl);
+  const { player, status } = appendAssistantAudioMessage(objectUrl);
+  if (!appState.uiPrefs.autoPlayVoiceReplies) {
+    return;
+  }
+  try {
+    await player.play();
+    status.textContent = "Auto-played.";
+  } catch {
+    status.textContent = "Auto-play was blocked. Tap Play.";
+  }
 }
 
 function clearReconnectTimer() {
@@ -857,6 +898,7 @@ async function stopRecording() {
 
 async function init() {
   syncPairedLayout();
+  await restoreUiPrefs();
   if (!supportsRequiredCrypto()) {
     pairingMessageEl.textContent = "This browser is not supported. Use a current Chromium-based browser.";
     pairButtonEl.disabled = true;
@@ -894,6 +936,9 @@ async function init() {
   });
   chatClearEl?.addEventListener("click", () => {
     clearLocalChat();
+  });
+  autoPlayVoiceRepliesEl?.addEventListener("change", () => {
+    void setAutoPlayVoiceReplies(autoPlayVoiceRepliesEl.checked);
   });
   chatInputEl.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !chatSendEl.disabled) {

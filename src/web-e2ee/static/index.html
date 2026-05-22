@@ -57,7 +57,13 @@
       <section class="card card-chat">
         <div class="chat-header">
           <h2>Chat</h2>
-          <button id="chat-clear" type="button">Clear local chat</button>
+          <div class="chat-header-actions">
+            <button id="chat-clear" type="button">Clear local chat</button>
+            <label class="chat-toggle" for="auto-play-voice-replies">
+              <input id="auto-play-voice-replies" type="checkbox">
+              <span>Auto-play voice replies</span>
+            </label>
+          </div>
         </div>
         <div id="chat-log" class="chat-log" aria-live="polite"></div>
         <input id="chat-input" type="text" placeholder="Pair and connect to enable encrypted outbound text" disabled>

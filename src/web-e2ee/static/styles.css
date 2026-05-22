@@ -94,10 +94,17 @@ button {
 
 .chat-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 0.75rem;
+}
+
+.chat-header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
 }
 
 .chat-header button {
@@ -105,6 +112,22 @@ button {
   margin-top: 0;
   padding: 0.5rem 0.75rem;
   white-space: nowrap;
+}
+
+.chat-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #cbd5e1;
+  font-size: 0.95rem;
+}
+
+.chat-toggle input {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
 }
 
 button:disabled {
@@ -153,6 +176,11 @@ button:disabled {
 
 .chat-audio-label {
   color: #d1fae5;
+}
+
+.chat-audio-status {
+  color: #cbd5e1;
+  font-size: 0.95rem;
 }
 
 .chat-audio-player {

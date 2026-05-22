@@ -1,7 +1,8 @@
 const DB_NAME = "bryti-web-e2ee";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const PAIRED_STATE_STORE = "pairedState";
 const CRYPTO_KEYS_STORE = "cryptoKeys";
+const UI_PREFS_STORE = "uiPrefs";
 
 export function openWebE2EEDatabase() {
   return new Promise((resolve, reject) => {
@@ -13,6 +14,9 @@ export function openWebE2EEDatabase() {
       }
       if (!db.objectStoreNames.contains(CRYPTO_KEYS_STORE)) {
         db.createObjectStore(CRYPTO_KEYS_STORE, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(UI_PREFS_STORE)) {
+        db.createObjectStore(UI_PREFS_STORE, { keyPath: "id" });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -56,6 +60,14 @@ export async function saveDeviceKeyPair({ privateKey, publicKey }) {
 export async function loadDevicePrivateKey() {
   const record = await get(CRYPTO_KEYS_STORE, "devicePrivateKey");
   return record?.key || null;
+}
+
+export async function loadUiPrefs() {
+  return await get(UI_PREFS_STORE, "primary");
+}
+
+export async function saveUiPrefs(uiPrefs) {
+  await put(UI_PREFS_STORE, { ...uiPrefs, id: "primary" });
 }
 
 export async function clearPairedState() {
