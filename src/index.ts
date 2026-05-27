@@ -3,7 +3,7 @@
  * Bryti entry point.
  *
  * Wires config, persistent pi sessions (one per user), channel bridges
- * (Telegram, WhatsApp), cron scheduler, and the message queue together.
+ * (Telegram, WhatsApp, Threema, web_e2ee), cron scheduler, and the message queue together.
  *
  * Startup: load config, ensure data dirs, warm up embedding model, start
  * bridges, start scheduler, begin processing messages.
@@ -47,6 +47,7 @@ import { warmupEmbeddings, disposeEmbeddings } from "./memory/embeddings.js";
 import { TelegramBridge } from "./channels/telegram.js";
 import { WhatsAppBridge } from "./channels/whatsapp.js";
 import { ThreemaBridge } from "./channels/threema.js";
+import { WebE2EEBridge } from "./channels/web_e2ee.js";
 import { createScheduler } from "./scheduler.js";
 import { MessageQueue } from "./message-queue.js";
 import type { IncomingMessage, ChannelBridge } from "./channels/types.js";
@@ -65,8 +66,20 @@ const { version: BRYTI_VERSION } = _require("../package.json") as { version: str
 // AppState, processMessage, getOrLoadSession, getBridge, triggerRestart
 // are imported from ./process-message.ts
 
-
-
+export function formatQueueFullLog(msg: IncomingMessage): unknown[] {
+  if (msg.platform === "web_e2ee") {
+    return [
+      "Queue full, rejecting web_e2ee message:",
+      {
+        platform: msg.platform,
+        channelId: msg.channelId,
+        userId: msg.userId,
+        textLength: msg.text.length,
+      },
+    ];
+  }
+  return ["Queue full, rejecting message:", msg.text];
+}
 
 /**
  * Start one app instance.
@@ -106,7 +119,7 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
   const voiceService = createVoiceService(config);
 
   // ---------------------------------------------------------------------------
-  // Bridge setup: Telegram, WhatsApp, Threema
+  // Bridge setup: Telegram, WhatsApp, Threema, web_e2ee
   // ---------------------------------------------------------------------------
   const bridges: ChannelBridge[] = [];
 
@@ -137,8 +150,13 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
     bridges.push(threema);
   }
 
+  if (config.web_e2ee.enabled) {
+    const webE2EE = new WebE2EEBridge(config.data_dir, config.web_e2ee);
+    bridges.push(webE2EE);
+  }
+
   if (bridges.length === 0) {
-    throw new Error("No channel bridges configured. Enable Telegram, WhatsApp, and/or Threema.");
+    throw new Error("No channel bridges configured. Enable Telegram, WhatsApp, Threema, and/or web_e2ee.");
   }
 
   // ---------------------------------------------------------------------------
@@ -163,7 +181,7 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
   const queue = new MessageQueue(
     (msg) => processMessage(state, msg),
     async (msg) => {
-      console.log("Queue full, rejecting message:", msg.text);
+      console.log(...formatQueueFullLog(msg));
       const bridge = getBridge(state, msg.platform);
       await bridge.sendMessage(
         msg.channelId,
@@ -235,7 +253,7 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
       const restartMsg: IncomingMessage = {
         channelId: marker.channelId,
         userId: marker.userId,
-        platform: marker.platform as "telegram" | "whatsapp" | "threema",
+        platform: marker.platform as IncomingMessage["platform"],
         text: `[System: you just restarted. Reason: "${marker.reason}". ` +
           `Verify the restart achieved its goal (check that new tools/extensions loaded, ` +
           `config changes took effect, etc.) and briefly confirm to the user.]`,

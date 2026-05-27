@@ -195,8 +195,9 @@ export class MessageQueue {
 
   /**
    * Merge multiple queue entries into a single IncomingMessage by joining
-   * their text with newlines and concatenating image arrays from all entries.
-   * Metadata (userId, channelId, platform, etc.) is taken from the first entry.
+   * their text with newlines and concatenating attachment arrays from all
+   * entries. Metadata (userId, channelId, platform, etc.) is taken from the
+   * first entry.
    */
   private mergeEntries(entries: QueueEntry[]): IncomingMessage {
     if (entries.length === 1) {

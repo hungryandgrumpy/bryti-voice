@@ -160,7 +160,8 @@ function cleanupPath(kind: "incoming" | "outgoing", filePath: string): void {
   try {
     fs.rmSync(filePath, { force: true });
   } catch (err) {
-    console.warn(`[voice] Failed to clean up ${kind} temp file ${filePath}:`, (err as Error).message);
+    const label = path.basename(filePath) || `${kind} temp file`;
+    console.warn(`[voice] Failed to clean up ${kind} temp file (${label}):`, (err as Error).message);
   }
 }
 
@@ -192,10 +193,12 @@ async function prepareVoiceMessage(state: AppState, msg: IncomingMessage): Promi
 
   const bridge = getBridge(state, msg.platform);
   if (!state.config.voice?.enabled) {
+    cleanupIncomingAudioFiles(state, msg.audio);
     await bridge.sendMessage(msg.channelId, "Voice messages are not enabled. Please send text instead.");
     return null;
   }
   if (!state.voiceService) {
+    cleanupIncomingAudioFiles(state, msg.audio);
     await bridge.sendMessage(msg.channelId, "Voice support is enabled but unavailable. Please send text instead.");
     return null;
   }
@@ -317,6 +320,7 @@ export async function getOrLoadSession(
     userId,
     (triggered) => {
       if (!state.enqueue) return;
+      const channelId = String(state.config.telegram.allowed_users[0] ?? userId);
       const summaries = triggered.map((p) => `- ${p.summary} (id: ${p.id})`).join("\n");
       state.enqueue({
         channelId,
@@ -328,7 +332,7 @@ export async function getOrLoadSession(
           `2. Share the key findings with the user FIRST\n` +
           `3. Only THEN suggest next steps or act on them\n` +
           `Never assume the user knows what the worker found. Always present the findings before drawing conclusions or taking action.`,
-        platform,
+        platform: "telegram",
         raw: { type: "worker_trigger" },
       });
     },
@@ -394,10 +398,11 @@ export async function getOrLoadSession(
   }
 
   userSession.onCompactionComplete = () => {
+    const channelId = String(state.config.telegram.allowed_users[0] ?? userId);
     const compactionMsg: IncomingMessage = {
       channelId,
       userId,
-      platform,
+      platform: "telegram",
       text:
         "[System: context was automatically compacted. If you were in the middle of a task " +
         "for the user, continue where you left off. If not, say nothing (NOOP).]",

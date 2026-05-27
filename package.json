@@ -22,7 +22,7 @@
     "docker-compose.yml"
   ],
   "scripts": {
-    "build": "tsc && cp -r defaults dist/",
+    "build": "tsc && cp -r defaults dist/ && mkdir -p dist/web-e2ee && cp -r src/web-e2ee/static dist/web-e2ee/",
     "dev": "tsx src/cli.ts serve",
     "start": "node dist/cli.js serve",
     "cli": "node dist/cli.js",
@@ -50,6 +50,7 @@
     "qrcode-terminal": "^0.12.0",
     "sqlite-vec": "^0.1.7-alpha.2",
     "tweetnacl": "^1.0.3",
+    "ws": "^8.20.1",
     "yaml": "^2.8.3"
   },
   "optionalDependencies": {
@@ -59,6 +60,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22",
     "@types/qrcode-terminal": "^0.12.2",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.21.0",
     "typescript": "^5.7",
     "vitest": "^4.0.18"

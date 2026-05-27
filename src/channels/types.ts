@@ -6,7 +6,7 @@
  * Planned: Discord, Slack, Matrix.
  */
 
-export type Platform = "telegram" | "whatsapp" | "threema" | "discord" | "slack" | "matrix";
+export type Platform = "telegram" | "whatsapp" | "threema" | "web_e2ee" | "discord" | "slack" | "matrix";
 
 export interface AudioAttachment {
   /** Local filesystem path to the downloaded audio file. */
@@ -26,7 +26,7 @@ export interface IncomingMessage {
   channelId: string;
   /** Platform-specific user ID */
   userId: string;
-  /** Optional platform-specific message ID */
+  /** Platform-specific message ID when available. */
   messageId?: string;
   /** Message text content */
   text: string;

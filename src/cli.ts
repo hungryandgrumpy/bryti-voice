@@ -29,9 +29,11 @@ try {
 
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
 import { loadConfig, resolveDataDir as defaultDataDir } from "./config.js";
 import { runReflection } from "./projection/index.js";
+import { createInviteStore } from "./web-e2ee/invite-store.js";
 
 // ---------------------------------------------------------------------------
 // Version
@@ -297,6 +299,23 @@ async function cmdArchiveFact(dataDir: string, userId: string, content: string):
 }
 
 // ---------------------------------------------------------------------------
+// Command: web-e2ee invite
+// ---------------------------------------------------------------------------
+
+export async function cmdWebE2EEInvite(dataDir: string): Promise<{ code: string; expiresAt: string }> {
+  const config = loadConfig(path.join(dataDir, "config.yml"));
+  config.data_dir = dataDir;
+
+  const ttlMinutes = config.web_e2ee.pairing.invite_ttl_minutes;
+  const created = await createInviteStore(dataDir).create(ttlMinutes);
+
+  console.log(`web_e2ee invite code: ${created.code}`);
+  console.log(`expires at: ${created.expiresAt}`);
+
+  return created;
+}
+
+// ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
 
@@ -338,6 +357,12 @@ Commands:
 
   archive-fact "<content>"
     Insert a fact into archival memory and check trigger-based projections.
+
+  web-e2ee invite
+    Create a one-time web_e2ee pairing invite using the configured default TTL.
+    Examples:
+      npm run cli -- web-e2ee invite
+      node dist/cli.js web-e2ee invite
 
   version
     Show version number.
@@ -464,6 +489,16 @@ async function main(): Promise<void> {
       break;
     }
 
+    case "web-e2ee": {
+      const sub = positional(1);
+      if (sub !== "invite") {
+        console.error("Usage: web-e2ee invite");
+        process.exit(1);
+      }
+      await cmdWebE2EEInvite(dataDir);
+      break;
+    }
+
     default:
       console.error(`Unknown command: ${command}`);
       console.error("Run 'bryti help' for usage.");
@@ -473,7 +508,13 @@ async function main(): Promise<void> {
   console.log("");
 }
 
-main().catch((err) => {
-  console.error("Fatal:", (err as Error).message);
-  process.exit(1);
-});
+const entryArg = process.argv[1];
+const isDirectEntry = entryArg
+  ? import.meta.url === pathToFileURL(path.resolve(entryArg)).href
+  : false;
+if (isDirectEntry) {
+  main().catch((err) => {
+    console.error("Fatal:", (err as Error).message);
+    process.exit(1);
+  });
+}

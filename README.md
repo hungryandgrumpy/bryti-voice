@@ -21,7 +21,7 @@
 
 ---
 
-Bryti is a personal AI agent that lives in Telegram and WhatsApp. It remembers what you tell it, tracks what's coming up, researches things in the background, and writes its own tools when it needs new capabilities. All running on your machine, with your data staying yours.
+Bryti is a personal AI agent that lives in the chat apps you already use, or in its own self-hosted web client. It remembers what you tell it, tracks what's coming up, researches things in the background, and writes its own tools when it needs new capabilities. All running on your machine, with your data staying yours.
 
 > *Named after the Old Norse **bryti**: the estate steward who handled the day-to-day so you could focus on what matters.*
 
@@ -36,6 +36,21 @@ Bryti is a personal AI agent that lives in Telegram and WhatsApp. It remembers w
 **It extends itself.** The agent writes TypeScript extensions to give itself new tools: API integrations, custom commands, whatever it needs. Write the file, restart, done.
 
 **It works without a subscription.** Configure free models via OpenCode, use your own Ollama instance, or bring any OpenAI-compatible API. Automatic fallback across providers means it keeps working when one goes down.
+
+## Channel support
+
+Bryti can run on multiple chat channels, but they are not all at the same maturity level. The practical difference is how much real-world use the channel has had, how much setup is involved, and how likely it is to need sharp-edge fixes.
+
+| Channel | Status | Built in | Notes |
+| --- | --- | --- | --- |
+| Telegram | Stable | Yes | The most exercised channel. Good default choice for daily use, approvals, markdown replies, images, and voice when voice support is enabled. |
+| WhatsApp | Beta | Yes | Useful because it is where many people already are, but the Web/Baileys integration can be brittle and may need re-authentication. |
+| Threema | Alpha | Yes | Privacy-focused and promising, especially with Gateway E2E, but setup is heavier and the channel is newer. Expect some operator rough edges. |
+| Web E2EE | Alpha | Yes | Self-hosted PWA with encrypted text, and voice when enabled. Strategically interesting because it gives Bryti its own private chat surface, but pairing, browser audio, and crypto handling need more review before calling it stable. |
+| Discord | Stable | Planned | Expected to be a good fit for server-style usage and developer workflows, but it is not wired into this branch yet. |
+| Slack | Beta | Planned | Useful for text-oriented team workflows, but also not wired into this branch yet. |
+
+Status labels are intentionally conservative. Alpha means the channel is worth trying if you are comfortable debugging it; beta means it should work for normal use, but still has integration-specific sharp edges.
 
 ## Getting started
 

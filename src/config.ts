@@ -72,6 +72,18 @@ export interface VoiceConfig {
   max_tts_chars: number;
 }
 
+export interface WebE2EEConfig {
+  enabled: boolean;
+  listen_host: string;
+  listen_port: number;
+  public_origin: string;
+  allowed_origins: string[];
+  path_prefix: string;
+  pairing: {
+    invite_ttl_minutes: number;
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Agent definition types
 //
@@ -254,6 +266,7 @@ export interface Config {
       path: string;
     };
   };
+  web_e2ee: WebE2EEConfig;
   models: {
     providers: ProviderConfig[];
   };
@@ -383,7 +396,7 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
-function booleanFrom(value: unknown, fallback = false): boolean {
+function booleanFrom(value: unknown, fallback: boolean): boolean {
   if (typeof value === "boolean") return value;
   if (typeof value === "string") {
     if (value === "true") return true;
@@ -451,6 +464,33 @@ export function applyIntegrationEnvVars(config: Config): void {
       }
     }
   }
+}
+
+/**
+ * Parse the web_e2ee section of the substituted config, applying defaults.
+ */
+function webE2EEFromConfig(substituted: Record<string, unknown>): WebE2EEConfig {
+  const raw = (substituted.web_e2ee ?? {}) as Record<string, unknown>;
+  const pairingRaw = (raw.pairing ?? {}) as Record<string, unknown>;
+  const publicOrigin = typeof raw.public_origin === "string" ? raw.public_origin : "https://bryti.tailnet.ts.net";
+
+  const allowedOrigins = raw.allowed_origins === undefined
+    ? [publicOrigin]
+    : Array.isArray(raw.allowed_origins) && raw.allowed_origins.every((v) => typeof v === "string")
+      ? raw.allowed_origins
+      : [];
+
+  return {
+    enabled: raw.enabled === true,
+    listen_host: typeof raw.listen_host === "string" ? raw.listen_host : "127.0.0.1",
+    listen_port: toFiniteNumber(raw.listen_port) ?? 8787,
+    public_origin: publicOrigin,
+    allowed_origins: allowedOrigins,
+    path_prefix: typeof raw.path_prefix === "string" ? raw.path_prefix : "/",
+    pairing: {
+      invite_ttl_minutes: toFiniteNumber(pairingRaw.invite_ttl_minutes) ?? 10,
+    },
+  };
 }
 
 /**
@@ -651,6 +691,7 @@ export function loadConfig(configPath?: string): Config {
         },
       };
     })(),
+    web_e2ee: webE2EEFromConfig(substituted),
     models: {
       providers: [],
       ...(substituted.models as object),
@@ -692,33 +733,33 @@ export function loadConfig(configPath?: string): Config {
   return config;
 }
 
+/**
+ * Validate config at startup so bad config doesn't surface 30 minutes later
+ * when a cron job fires.
+ */
 function validateVoiceCommand(name: string, command: string[]): string[] {
   const errors: string[] = [];
   if (command.length === 0) {
     errors.push(`${name} is required when voice is enabled`);
     return errors;
   }
-  if (!command.some(part => part.includes("{input}"))) {
+  if (!command.some((part) => part.includes("{input}"))) {
     errors.push(`${name} must include {input}`);
   }
-  if (!command.some(part => part.includes("{output}"))) {
+  if (!command.some((part) => part.includes("{output}"))) {
     errors.push(`${name} must include {output}`);
   }
   return errors;
 }
 
-/**
- * Validate config at startup so bad config doesn't surface 30 minutes later
- * when a cron job fires.
- */
 function validateConfig(config: Config): void {
   const errors: string[] = [];
   const warnings: string[] = [];
 
   // --- Required fields ---
 
-  if (!config.telegram.token && !config.whatsapp.enabled && !config.threema.enabled) {
-    errors.push("telegram.token is required (or enable whatsapp or threema)");
+  if (!config.telegram.token && !config.whatsapp.enabled && !config.threema.enabled && !config.web_e2ee.enabled) {
+    errors.push("telegram.token is required (or enable whatsapp, threema, or web_e2ee)");
   }
   if (!config.agent.model) {
     errors.push("agent.model is required");
@@ -763,6 +804,8 @@ function validateConfig(config: Config): void {
     );
   }
 
+  // --- Threema validation ---
+
   if (config.threema.enabled) {
     if (!config.threema.gateway_id) {
       errors.push("threema.gateway_id is required when threema is enabled");
@@ -789,10 +832,27 @@ function validateConfig(config: Config): void {
     }
   }
 
-  // --- Web search needs a URL ---
+  // --- web_e2ee validation ---
 
-  if (config.tools.web_search.enabled && !config.tools.web_search.searxng_url) {
-    warnings.push("web_search is enabled but searxng_url is empty. Workers won't be able to search.");
+  if (config.web_e2ee.listen_port <= 0) {
+    errors.push("web_e2ee.listen_port must be greater than 0");
+  }
+  if (!config.web_e2ee.path_prefix.startsWith("/")) {
+    errors.push("web_e2ee.path_prefix must start with '/'");
+  }
+  if (config.web_e2ee.allowed_origins.length === 0) {
+    errors.push("web_e2ee.allowed_origins must be a string array");
+  }
+  if (config.web_e2ee.enabled) {
+    if (!config.web_e2ee.public_origin) {
+      errors.push("web_e2ee.public_origin is required when web_e2ee is enabled");
+    } else {
+      try {
+        new URL(config.web_e2ee.public_origin);
+      } catch {
+        errors.push("web_e2ee.public_origin must be a valid URL when web_e2ee is enabled");
+      }
+    }
   }
 
   // --- Voice command configuration ---
@@ -815,6 +875,12 @@ function validateConfig(config: Config): void {
     if (config.voice.max_tts_chars < 0) {
       errors.push("voice.max_tts_chars must be 0 or greater");
     }
+  }
+
+  // --- Web search needs a URL ---
+
+  if (config.tools.web_search.enabled && !config.tools.web_search.searxng_url) {
+    warnings.push("web_search is enabled but searxng_url is empty. Workers won't be able to search.");
   }
 
   // --- Emit ---
@@ -845,6 +911,9 @@ export function ensureDataDirs(config: Config): void {
 
   // WhatsApp auth directory (always create in case user adds WhatsApp later)
   dirs.push(path.join(config.data_dir, "whatsapp-auth"));
+
+  // Reserved for future web_e2ee channel state (keys, pairing registry, etc.)
+  dirs.push(path.join(config.data_dir, "web-e2ee"));
 
   for (const dir of dirs) {
     fs.mkdirSync(dir, { recursive: true });

@@ -1,0 +1,193 @@
+/* src/web-e2ee/static/styles.css    */
+:root {
+  color-scheme: dark;
+  font-family: Inter, system-ui, sans-serif;
+  background: #111827;
+  color: #f9fafb;
+}
+
+body {
+  margin: 0;
+  background: #111827;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 2rem 1rem 4rem;
+}
+
+h1, h2, p {
+  margin-top: 0;
+}
+
+h2 {
+  margin-bottom: 0;
+}
+
+.lede {
+  color: #cbd5e1;
+}
+
+.card {
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.app.paired .card-chat {
+  order: -3;
+}
+
+.app.paired .card-status {
+  order: -2;
+}
+
+.app.paired .card-pair-device {
+  order: -1;
+}
+
+.card.muted {
+  opacity: 0.75;
+}
+
+dl {
+  margin: 0;
+}
+
+ dl div {
+  display: grid;
+  grid-template-columns: 12rem 1fr;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+
+ dt {
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+ dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+input,
+button {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid #4b5563;
+}
+
+button {
+  background: #374151;
+  color: #f9fafb;
+  cursor: pointer;
+}
+
+.chat-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.chat-header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.chat-header button {
+  width: auto;
+  margin-top: 0;
+  padding: 0.5rem 0.75rem;
+  white-space: nowrap;
+}
+
+.chat-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #cbd5e1;
+  font-size: 0.95rem;
+}
+
+.chat-toggle input {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.voice-ready-highlight {
+  border-color: #34d399;
+  box-shadow: 0 0 0 0.18rem rgba(52, 211, 153, 0.3);
+}
+
+.chat-log {
+  min-height: 4rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  margin-bottom: 0.75rem;
+}
+
+.recording-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.recording-status {
+  margin-top: 0.75rem;
+  color: #cbd5e1;
+}
+
+.chat-line {
+  margin: 0 0 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  background: #111827;
+}
+
+.chat-line-user {
+  border: 1px solid #2563eb;
+}
+
+.chat-line-assistant {
+  border: 1px solid #059669;
+}
+
+.chat-line-audio {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.chat-audio-label {
+  color: #d1fae5;
+}
+
+.chat-audio-status {
+  color: #cbd5e1;
+  font-size: 0.95rem;
+}
+
+.chat-audio-player {
+  width: 100%;
+}

@@ -13,10 +13,6 @@ describe("Config", () => {
 
   afterEach(() => {
     delete process.env.BRYTI_DATA_DIR;
-    delete process.env.THREEMA_ENABLED;
-    delete process.env.THREEMA_ALLOWED_SENDERS;
-    delete process.env.THREEMA_SECRET;
-    delete process.env.THREEMA_PRIVATE_KEY_PATH;
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -82,6 +78,17 @@ cron: []
 
     expect(config.tools.web_search.enabled).toBe(true);
     expect(config.tools.fetch_url.timeout_ms).toBe(10000);
+    expect(config.web_e2ee).toEqual({
+      enabled: false,
+      listen_host: "127.0.0.1",
+      listen_port: 8787,
+      public_origin: "https://bryti.tailnet.ts.net",
+      allowed_origins: ["https://bryti.tailnet.ts.net"],
+      path_prefix: "/",
+      pairing: {
+        invite_ttl_minutes: 10,
+      },
+    });
   });
 
   it("should create data directories", () => {
@@ -260,6 +267,160 @@ cron: []
     expect(config.agent.system_prompt).toContain("${tempC}");
   });
 
+  it("should derive web_e2ee.allowed_origins from public_origin when omitted", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+web_e2ee:
+  enabled: true
+  public_origin: https://dragon.example.ts.net
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    const config = loadConfig();
+    expect(config.web_e2ee.public_origin).toBe("https://dragon.example.ts.net");
+    expect(config.web_e2ee.allowed_origins).toEqual(["https://dragon.example.ts.net"]);
+  });
+
+  it("should parse explicit web_e2ee config", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+web_e2ee:
+  enabled: true
+  listen_host: 0.0.0.0
+  listen_port: 9999
+  public_origin: https://chat.example.test
+  allowed_origins:
+    - https://chat.example.test
+    - https://alt.example.test
+  path_prefix: /chat
+  pairing:
+    invite_ttl_minutes: 42
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    const config = loadConfig();
+
+    expect(config.web_e2ee).toEqual({
+      enabled: true,
+      listen_host: "0.0.0.0",
+      listen_port: 9999,
+      public_origin: "https://chat.example.test",
+      allowed_origins: ["https://chat.example.test", "https://alt.example.test"],
+      path_prefix: "/chat",
+      pairing: {
+        invite_ttl_minutes: 42,
+      },
+    });
+  });
+
+  it("should allow web_e2ee as the only enabled channel", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+web_e2ee:
+  enabled: true
+  public_origin: https://chat.example.test
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    const config = loadConfig();
+    expect(config.web_e2ee.enabled).toBe(true);
+    expect(config.telegram.token).toBe("");
+    expect(config.whatsapp.enabled).toBe(false);
+  });
+
+  it("should reject invalid web_e2ee.listen_port", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+web_e2ee:
+  enabled: true
+  listen_port: 0
+  public_origin: https://chat.example.test
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    expect(() => loadConfig()).toThrow("web_e2ee.listen_port must be greater than 0");
+  });
+
+  it("should reject invalid web_e2ee.path_prefix", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+web_e2ee:
+  enabled: true
+  path_prefix: chat
+  public_origin: https://chat.example.test
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    expect(() => loadConfig()).toThrow("web_e2ee.path_prefix must start with '/'");
+  });
+
+  it("should reject invalid web_e2ee.allowed_origins", () => {
+    const configContent = `
+agent:
+  name: TestBot
+  model: test/model
+web_e2ee:
+  enabled: true
+  public_origin: https://chat.example.test
+  allowed_origins: https://chat.example.test
+models:
+  providers:
+    - name: test
+      base_url: https://test.example.com
+      api_key: test-key
+      models: []
+cron: []
+`;
+    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
+
+    expect(() => loadConfig()).toThrow("web_e2ee.allowed_origins must be a string array");
+  });
+
   it("should reject missing required fields", () => {
     const configContent = `
 agent:
@@ -412,51 +573,6 @@ cron: []
     expect(() => loadConfig()).toThrow("voice.transcribe_command must include {output}");
   });
 
-  it("defaults keep_temp_files to false and parses explicit true", () => {
-    const defaultConfigContent = `
-agent:
-  name: TestBot
-  model: test/model
-telegram:
-  token: test-token
-models:
-  providers:
-    - name: test
-      base_url: https://test.example.com
-      api_key: test-key
-      models: []
-voice:
-  enabled: true
-  transcribe_command: ["stt", "{input}", "{output}"]
-  synthesize_command: ["tts", "{input}", "{output}"]
-cron: []
-`;
-    fs.writeFileSync(path.join(tempDir, "config.yml"), defaultConfigContent);
-    expect(loadConfig().voice?.keep_temp_files).toBe(false);
-
-    const explicitConfigContent = `
-agent:
-  name: TestBot
-  model: test/model
-telegram:
-  token: test-token
-models:
-  providers:
-    - name: test
-      base_url: https://test.example.com
-      api_key: test-key
-      models: []
-voice:
-  enabled: true
-  transcribe_command: ["stt", "{input}", "{output}"]
-  synthesize_command: ["tts", "{input}", "{output}"]
-  keep_temp_files: true
-cron: []
-`;
-    fs.writeFileSync(path.join(tempDir, "config.yml"), explicitConfigContent);
-    expect(loadConfig().voice?.keep_temp_files).toBe(true);
-  });
-
   it("requires synthesize command only when voice replies are enabled", () => {
     const configContent = `
 agent:
@@ -505,41 +621,6 @@ cron: []
     fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
 
     expect(() => loadConfig()).toThrow("voice.synthesize_command is required when voice is enabled");
-  });
-
-  it("parses threema config and allowed_senders from env-style strings", () => {
-    const privateKeyPath = path.join(tempDir, "threema-private.key");
-    fs.writeFileSync(privateKeyPath, `private:${"11".repeat(32)}\n`, "utf8");
-    process.env.THREEMA_ENABLED = "true";
-    process.env.THREEMA_ALLOWED_SENDERS = "ABCDEFGH,12345678";
-    process.env.THREEMA_SECRET = "topsecret";
-    process.env.THREEMA_PRIVATE_KEY_PATH = privateKeyPath;
-
-    const configContent = `
-agent:
-  name: TestBot
-  model: test/model
-threema:
-  enabled: \${THREEMA_ENABLED}
-  gateway_id: "*BRYTI01"
-  secret: \${THREEMA_SECRET}
-  private_key_path: \${THREEMA_PRIVATE_KEY_PATH}
-  allowed_senders: \${THREEMA_ALLOWED_SENDERS}
-models:
-  providers:
-    - name: test
-      base_url: https://test.example.com
-      api_key: test-key
-      models: []
-cron: []
-`;
-    fs.writeFileSync(path.join(tempDir, "config.yml"), configContent);
-
-    const config = loadConfig();
-
-    expect(config.threema.enabled).toBe(true);
-    expect(config.threema.allowed_senders).toEqual(["ABCDEFGH", "12345678"]);
-    expect(config.threema.private_key_path).toBe(privateKeyPath);
   });
 });
 

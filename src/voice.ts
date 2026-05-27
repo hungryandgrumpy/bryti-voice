@@ -1,4 +1,3 @@
-// src/voice.ts 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -45,7 +44,7 @@ async function runCommand(command: string[], timeoutMs: number): Promise<Command
     throw new VoiceCommandError("Voice command is empty");
   }
 
-  return new Promise((resolve, reject) => {
+  return await new Promise((resolve, reject) => {
     const child = spawn(command[0], command.slice(1), {
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
@@ -56,7 +55,9 @@ async function runCommand(command: string[], timeoutMs: number): Promise<Command
     let settled = false;
 
     const finish = (fn: () => void) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       fn();
@@ -64,7 +65,6 @@ async function runCommand(command: string[], timeoutMs: number): Promise<Command
 
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      // If process doesn't exit within 1 second after SIGTERM, force kill with SIGKILL
       setTimeout(() => {
         if (!settled) {
           child.kill("SIGKILL");
@@ -74,9 +74,13 @@ async function runCommand(command: string[], timeoutMs: number): Promise<Command
     }, timeoutMs);
 
     child.stdout?.setEncoding("utf-8");
-    child.stdout?.on("data", (chunk) => { stdout += chunk; });
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk;
+    });
     child.stderr?.setEncoding("utf-8");
-    child.stderr?.on("data", (chunk) => { stderr += chunk; });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk;
+    });
 
     child.on("error", (err) => {
       finish(() => reject(new VoiceCommandError(`Voice command failed to start: ${err.message}`)));
@@ -95,6 +99,17 @@ async function runCommand(command: string[], timeoutMs: number): Promise<Command
   });
 }
 
+function cleanupHelperTempFile(filePath: string, keepTempFiles: boolean): void {
+  if (keepTempFiles) {
+    return;
+  }
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
 export class CommandVoiceService implements VoiceService {
   constructor(
     private readonly dataDir: string,
@@ -108,20 +123,24 @@ export class CommandVoiceService implements VoiceService {
     }
 
     const outputPath = makeTempPath(this.dataDir, ".txt");
-    const command = substitutePlaceholders(this.config.transcribe_command, first.path, outputPath);
-    await runCommand(command, this.config.command_timeout_ms);
-
-    let transcript: string;
     try {
-      transcript = fs.readFileSync(outputPath, "utf-8").trim();
-    } catch (err) {
-      throw new VoiceCommandError(`Voice transcription output was not written: ${(err as Error).message}`);
-    }
+      const command = substitutePlaceholders(this.config.transcribe_command, first.path, outputPath);
+      await runCommand(command, this.config.command_timeout_ms);
 
-    if (!transcript) {
-      throw new VoiceCommandError("Voice transcription output was empty");
+      let transcript: string;
+      try {
+        transcript = fs.readFileSync(outputPath, "utf-8").trim();
+      } catch (err) {
+        throw new VoiceCommandError(`Voice transcription output was not written: ${(err as Error).message}`);
+      }
+
+      if (!transcript) {
+        throw new VoiceCommandError("Voice transcription output was empty");
+      }
+      return transcript;
+    } finally {
+      cleanupHelperTempFile(outputPath, this.config.keep_temp_files);
     }
-    return transcript;
   }
 
   async synthesize(text: string): Promise<string> {
@@ -138,13 +157,17 @@ export class CommandVoiceService implements VoiceService {
       : trimmed;
     fs.writeFileSync(inputPath, ttsText, "utf-8");
 
-    const command = substitutePlaceholders(this.config.synthesize_command, inputPath, outputPath);
-    await runCommand(command, this.config.command_timeout_ms);
+    try {
+      const command = substitutePlaceholders(this.config.synthesize_command, inputPath, outputPath);
+      await runCommand(command, this.config.command_timeout_ms);
 
-    if (!fs.existsSync(outputPath)) {
-      throw new VoiceCommandError("Voice synthesis output was not written");
+      if (!fs.existsSync(outputPath)) {
+        throw new VoiceCommandError("Voice synthesis output was not written");
+      }
+      return outputPath;
+    } finally {
+      cleanupHelperTempFile(inputPath, this.config.keep_temp_files);
     }
-    return outputPath;
   }
 }
 

@@ -19,11 +19,6 @@ import os from "node:os";
 import path from "node:path";
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
 import type { ApprovalResult, AudioAttachment, ChannelBridge, IncomingMessage, SendOpts } from "./types.js";
-import {
-  normalizeTelegramImageMessage,
-  normalizeTelegramTextMessage,
-  normalizeTelegramVoiceMessage,
-} from "./telegram-normalize.js";
 import { markdownToIR, chunkMarkdownIR, type MarkdownLinkSpan } from "./markdown/ir.js";
 import { renderMarkdownWithMarkers } from "./markdown/render.js";
 import {
@@ -354,17 +349,15 @@ export class TelegramBridge implements ChannelBridge {
       const text = ctx.message.text;
       if (!text) return;
 
-      const fromId = ctx.from?.id;
-      if (fromId == null) return;
-
       if (this.handler) {
-        await this.handler(normalizeTelegramTextMessage({
-          chatId: ctx.chat.id,
-          fromId,
-          messageId: ctx.message.message_id,
+        const msg: IncomingMessage = {
+          channelId: String(ctx.chat.id),
+          userId: String(ctx.from?.id),
           text,
+          platform: "telegram",
           raw: ctx.message,
-        }));
+        };
+        await this.handler(msg);
       }
     });
 
@@ -424,14 +417,15 @@ export class TelegramBridge implements ChannelBridge {
 
       // Single photo (no album)
       const text = caption || "The user sent this image.";
-      await this.handler(normalizeTelegramImageMessage({
-        chatId: channelId,
-        fromId: userId,
-        messageId: ctx.message.message_id,
+      const msg: IncomingMessage = {
+        channelId,
+        userId,
         text,
+        platform: "telegram",
         raw: ctx.message,
         images: image,
-      }));
+      };
+      await this.handler(msg);
     });
 
     // Handle Telegram voice notes. Audio is downloaded to a temporary local
@@ -444,22 +438,26 @@ export class TelegramBridge implements ChannelBridge {
 
       if (!this.handler) return;
 
+      const fromId = ctx.from?.id;
+      if (fromId == null) return;
+
       const audio = await this.downloadVoice(ctx);
       if (!audio) {
         await ctx.reply("Sorry, I couldn't download that voice message.");
         return;
       }
 
-      const fromId = ctx.from?.id;
-      if (fromId == null) return;
-
-      await this.handler(normalizeTelegramVoiceMessage({
-        chatId: ctx.chat.id,
-        fromId,
-        messageId: ctx.message.message_id,
+      const msg: IncomingMessage = {
+        channelId: String(ctx.chat.id),
+        userId: String(fromId),
+        messageId: String(ctx.message.message_id),
+        text: "The user sent a voice message.",
+        platform: "telegram",
         raw: ctx.message,
         audio,
-      }));
+        replyMode: "voice",
+      };
+      await this.handler(msg);
     });
 
     // Handle document messages that are images (sent as files instead of photos)
@@ -472,7 +470,7 @@ export class TelegramBridge implements ChannelBridge {
       const doc = ctx.message.document;
       const mimeType = doc.mime_type ?? "";
       if (!mimeType.startsWith("image/")) {
-        await ctx.reply("Sorry, I can only handle text messages and images for now.");
+        await ctx.reply("Sorry, I can only handle text messages, images, and voice messages for now.");
         return;
       }
 
@@ -485,17 +483,15 @@ export class TelegramBridge implements ChannelBridge {
       }
 
       const text = ctx.message.caption?.trim() || "The user sent this image.";
-      const fromId = ctx.from?.id;
-      if (fromId == null) return;
-
-      await this.handler(normalizeTelegramImageMessage({
-        chatId: ctx.chat.id,
-        fromId,
-        messageId: ctx.message.message_id,
+      const msg: IncomingMessage = {
+        channelId: String(ctx.chat.id),
+        userId: String(ctx.from?.id),
         text,
+        platform: "telegram",
         raw: ctx.message,
         images,
-      }));
+      };
+      await this.handler(msg);
     });
 
     // Handle non-text messages
@@ -504,7 +500,7 @@ export class TelegramBridge implements ChannelBridge {
         await ctx.reply("Sorry, you're not authorized to use this bot.");
         return;
       }
-      await ctx.reply("Sorry, I can only handle text messages and images for now.");
+      await ctx.reply("Sorry, I can only handle text messages, images, and voice messages for now.");
     });
 
     // Handle inline keyboard callbacks for approval requests.
@@ -794,16 +790,18 @@ export class TelegramBridge implements ChannelBridge {
     if (!this.handler || entry.images.length === 0) return;
 
     const text = entry.caption || "The user sent this image.";
+    const msg: IncomingMessage = {
+      channelId: entry.channelId,
+      userId: entry.userId,
+      text,
+      platform: "telegram",
+      raw: entry.raw,
+      images: entry.images,
+    };
 
     console.log(`[telegram] Flushing media group ${mediaGroupId}: ${entry.images.length} image(s)`);
     try {
-      await this.handler(normalizeTelegramImageMessage({
-        chatId: entry.channelId,
-        fromId: entry.userId,
-        text,
-        raw: entry.raw,
-        images: entry.images,
-      }));
+      await this.handler(msg);
     } catch (err) {
       console.error("[telegram] Media group handler error:", (err as Error).message);
     }
@@ -886,6 +884,8 @@ export class TelegramBridge implements ChannelBridge {
       return null;
     }
 
+    let dirPath = "";
+    let localPath = "";
     try {
       const url = `https://api.telegram.org/file/bot${this.botToken}/${filePath}`;
       const response = await fetch(url);
@@ -895,10 +895,10 @@ export class TelegramBridge implements ChannelBridge {
       }
 
       const buffer = Buffer.from(await response.arrayBuffer());
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bryti-telegram-voice-"));
+      dirPath = fs.mkdtempSync(path.join(os.tmpdir(), "bryti-telegram-voice-"));
       const remoteName = path.basename(filePath) || `${voice.file_unique_id}.ogg`;
       const localName = path.extname(remoteName) ? remoteName : `${remoteName}.ogg`;
-      const localPath = path.join(dir, localName);
+      localPath = path.join(dirPath, localName);
       fs.writeFileSync(localPath, buffer);
 
       const rawMime = response.headers.get("content-type")?.split(";")[0].trim();
@@ -911,6 +911,16 @@ export class TelegramBridge implements ChannelBridge {
         durationSeconds: voice.duration,
       }];
     } catch (err) {
+      if (localPath) {
+        try {
+          fs.rmSync(localPath, { force: true });
+        } catch {}
+      }
+      if (dirPath) {
+        try {
+          fs.rmSync(dirPath, { recursive: true, force: true });
+        } catch {}
+      }
       console.error("[telegram] Voice fetch failed:", (err as Error).message);
       return null;
     }

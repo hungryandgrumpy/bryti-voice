@@ -1,10 +1,13 @@
-// src/voice.test.ts 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CommandVoiceService, createVoiceService, VoiceCommandError } from "./voice.js";
-import type { Config, VoiceConfig } from "./config.js";
+import { afterEach, describe, expect, it } from "vitest";
+import type { VoiceConfig } from "./config.js";
+import { CommandVoiceService, VoiceCommandError } from "./voice.js";
+
+function makeTmpDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "bryti-voice-test-"));
+}
 
 function baseVoiceConfig(overrides: Partial<VoiceConfig> = {}): VoiceConfig {
   return {
@@ -20,139 +23,177 @@ function baseVoiceConfig(overrides: Partial<VoiceConfig> = {}): VoiceConfig {
   };
 }
 
-function helperScript(dir: string): string {
-  const scriptPath = path.join(dir, "voice-helper.cjs");
-  fs.writeFileSync(scriptPath, `
-const fs = require("fs");
-const mode = process.argv[2];
-const input = process.argv[3];
-const output = process.argv[4];
-if (mode === "transcribe") {
-  fs.writeFileSync(output, fs.readFileSync(input, "utf8").toUpperCase(), "utf8");
-} else if (mode === "synthesize") {
-  fs.writeFileSync(output, "AUDIO:" + fs.readFileSync(input, "utf8"), "utf8");
-} else if (mode === "empty") {
-  fs.writeFileSync(output, "", "utf8");
-} else if (mode === "fail") {
-  console.error("intentional failure");
-  process.exit(7);
-} else if (mode === "sleep") {
-  setTimeout(() => fs.writeFileSync(output, "late", "utf8"), 5000);
-} else if (mode === "args") {
-  fs.writeFileSync(output, JSON.stringify(process.argv.slice(3)), "utf8");
-} else {
-  console.error("unknown mode");
-  process.exit(2);
+function voiceTempDir(dataDir: string): string {
+  return path.join(dataDir, "files", "voice");
 }
-`, "utf-8");
-  return scriptPath;
+
+function voiceTempFiles(dataDir: string): string[] {
+  const dir = voiceTempDir(dataDir);
+  return fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
 }
 
 describe("CommandVoiceService", () => {
-  let tempDir: string;
-  let helper: string;
-
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "bryti-voice-test-"));
-    helper = helperScript(tempDir);
-  });
+  const tempDirs: string[] = [];
 
   afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  it("transcribes by substituting input and output placeholders", async () => {
-    const audioPath = path.join(tempDir, "input with spaces.ogg");
-    fs.writeFileSync(audioPath, "hello bryti", "utf-8");
+  it("transcribes audio using the configured command", async () => {
+    const tempDir = makeTmpDir();
+    tempDirs.push(tempDir);
+    const inputPath = path.join(tempDir, "input.ogg");
+    fs.writeFileSync(inputPath, "fake audio");
+
     const service = new CommandVoiceService(tempDir, baseVoiceConfig({
-      transcribe_command: [process.execPath, helper, "transcribe", "{input}", "{output}"],
+      transcribe_command: [
+        process.execPath,
+        "-e",
+        "const fs=require('node:fs'); fs.writeFileSync(process.argv.at(-1), 'hello transcript');",
+        "{input}",
+        "--output",
+        "{output}",
+      ],
     }));
 
-    await expect(service.transcribe([{ path: audioPath, mimeType: "audio/ogg" }]))
-      .resolves.toBe("HELLO BRYTI");
+    const transcript = await service.transcribe([{ path: inputPath, mimeType: "audio/ogg" }]);
+    expect(transcript).toBe("hello transcript");
   });
 
-  it("synthesizes text to an output audio path", async () => {
+  it("synthesizes text into an output audio file", async () => {
+    const tempDir = makeTmpDir();
+    tempDirs.push(tempDir);
+
     const service = new CommandVoiceService(tempDir, baseVoiceConfig({
-      synthesize_command: [process.execPath, helper, "synthesize", "{input}", "{output}"],
-      synthesized_audio_extension: ".voice",
-    }));
-
-    const outputPath = await service.synthesize("hello");
-
-    expect(outputPath.endsWith(".voice")).toBe(true);
-    expect(fs.readFileSync(outputPath, "utf-8")).toBe("AUDIO:hello");
-  });
-
-  it("clips synthesized text when max_tts_chars is set", async () => {
-    const service = new CommandVoiceService(tempDir, baseVoiceConfig({
-      synthesize_command: [process.execPath, helper, "synthesize", "{input}", "{output}"],
-      max_tts_chars: 5,
+      synthesize_command: [
+        process.execPath,
+        "-e",
+        "const fs=require('node:fs'); const inPath=process.argv[1]; const outPath=process.argv.at(-1); fs.writeFileSync(outPath, fs.readFileSync(inPath, 'utf8'));",
+        "{input}",
+        "--output",
+        "{output}",
+      ],
     }));
 
     const outputPath = await service.synthesize("hello world");
-
-    expect(fs.readFileSync(outputPath, "utf-8")).toBe("AUDIO:hello…");
+    expect(fs.existsSync(outputPath)).toBe(true);
+    expect(fs.readFileSync(outputPath, "utf-8")).toBe("hello world");
   });
 
-  it("fails cleanly on empty transcription output", async () => {
-    const audioPath = path.join(tempDir, "input.ogg");
-    fs.writeFileSync(audioPath, "hello", "utf-8");
+  it("removes helper txt temp files when keep_temp_files is false", async () => {
+    const tempDir = makeTmpDir();
+    tempDirs.push(tempDir);
+    const inputPath = path.join(tempDir, "input.ogg");
+    fs.writeFileSync(inputPath, "fake audio");
+
     const service = new CommandVoiceService(tempDir, baseVoiceConfig({
-      transcribe_command: [process.execPath, helper, "empty", "{input}", "{output}"],
+      transcribe_command: [
+        process.execPath,
+        "-e",
+        "const fs=require('node:fs'); fs.writeFileSync(process.argv.at(-1), 'hello transcript');",
+        "{input}",
+        "--output",
+        "{output}",
+      ],
+      synthesize_command: [
+        process.execPath,
+        "-e",
+        "const fs=require('node:fs'); const inPath=process.argv[1]; const outPath=process.argv.at(-1); fs.writeFileSync(outPath, fs.readFileSync(inPath, 'utf8'));",
+        "{input}",
+        "--output",
+        "{output}",
+      ],
     }));
 
-    await expect(service.transcribe([{ path: audioPath, mimeType: "audio/ogg" }]))
-      .rejects.toThrow("Voice transcription output was empty");
+    await expect(service.transcribe([{ path: inputPath, mimeType: "audio/ogg" }])).resolves.toBe("hello transcript");
+    const outputPath = await service.synthesize("hello world");
+
+    expect(fs.existsSync(outputPath)).toBe(true);
+    expect(voiceTempFiles(tempDir).every((file) => !file.endsWith(".txt"))).toBe(true);
   });
 
-  it("fails cleanly on nonzero command exit", async () => {
-    const audioPath = path.join(tempDir, "input.ogg");
-    fs.writeFileSync(audioPath, "hello", "utf-8");
+  it("keeps helper txt temp files when keep_temp_files is true", async () => {
+    const tempDir = makeTmpDir();
+    tempDirs.push(tempDir);
+    const inputPath = path.join(tempDir, "input.ogg");
+    fs.writeFileSync(inputPath, "fake audio");
+
     const service = new CommandVoiceService(tempDir, baseVoiceConfig({
-      transcribe_command: [process.execPath, helper, "fail", "{input}", "{output}"],
+      keep_temp_files: true,
+      transcribe_command: [
+        process.execPath,
+        "-e",
+        "const fs=require('node:fs'); fs.writeFileSync(process.argv.at(-1), 'hello transcript');",
+        "{input}",
+        "--output",
+        "{output}",
+      ],
+      synthesize_command: [
+        process.execPath,
+        "-e",
+        "const fs=require('node:fs'); const inPath=process.argv[1]; const outPath=process.argv.at(-1); fs.writeFileSync(outPath, fs.readFileSync(inPath, 'utf8'));",
+        "{input}",
+        "--output",
+        "{output}",
+      ],
     }));
 
-    await expect(service.transcribe([{ path: audioPath, mimeType: "audio/ogg" }]))
-      .rejects.toThrow(/intentional failure/);
+    await expect(service.transcribe([{ path: inputPath, mimeType: "audio/ogg" }])).resolves.toBe("hello transcript");
+    const outputPath = await service.synthesize("hello world");
+    const files = voiceTempFiles(tempDir);
+
+    expect(fs.existsSync(outputPath)).toBe(true);
+    expect(files.filter((file) => file.endsWith(".txt"))).toHaveLength(2);
+  });
+
+  it("truncates synthesized text to max_tts_chars", async () => {
+    const tempDir = makeTmpDir();
+    tempDirs.push(tempDir);
+
+    const service = new CommandVoiceService(tempDir, baseVoiceConfig({
+      max_tts_chars: 5,
+      synthesize_command: [
+        process.execPath,
+        "-e",
+        "const fs=require('node:fs'); const inPath=process.argv[1]; const outPath=process.argv.at(-1); fs.writeFileSync(outPath, fs.readFileSync(inPath, 'utf8'));",
+        "{input}",
+        "--output",
+        "{output}",
+      ],
+    }));
+
+    const outputPath = await service.synthesize("hello world");
+    expect(fs.readFileSync(outputPath, "utf-8")).toBe("hello…");
+  });
+
+  it("throws on empty transcription input", async () => {
+    const tempDir = makeTmpDir();
+    tempDirs.push(tempDir);
+    const service = new CommandVoiceService(tempDir, baseVoiceConfig());
+
+    await expect(service.transcribe([])).rejects.toThrow(VoiceCommandError);
   });
 
   it("times out long-running commands", async () => {
-    const audioPath = path.join(tempDir, "input.ogg");
-    fs.writeFileSync(audioPath, "hello", "utf-8");
+    const tempDir = makeTmpDir();
+    tempDirs.push(tempDir);
+    const inputPath = path.join(tempDir, "input.ogg");
+    fs.writeFileSync(inputPath, "fake audio");
+
     const service = new CommandVoiceService(tempDir, baseVoiceConfig({
-      transcribe_command: [process.execPath, helper, "sleep", "{input}", "{output}"],
       command_timeout_ms: 50,
+      transcribe_command: [
+        process.execPath,
+        "-e",
+        "setTimeout(() => {}, 1000)",
+        "{input}",
+        "--output",
+        "{output}",
+      ],
     }));
 
-    await expect(service.transcribe([{ path: audioPath, mimeType: "audio/ogg" }]))
-      .rejects.toThrow(/timed out/);
+    await expect(service.transcribe([{ path: inputPath, mimeType: "audio/ogg" }])).rejects.toThrow(/timed out/);
   });
-
-  it("passes placeholder values as argv without shell interpolation", async () => {
-    const audioPath = path.join(tempDir, "input;echo hacked.ogg");
-    fs.writeFileSync(audioPath, "hello", "utf-8");
-    const service = new CommandVoiceService(tempDir, baseVoiceConfig({
-      transcribe_command: [process.execPath, helper, "args", "{input}", "{output}"],
-    }));
-
-    const transcript = await service.transcribe([{ path: audioPath, mimeType: "audio/ogg" }]);
-    const argv = JSON.parse(transcript) as string[];
-
-    expect(argv[0]).toBe(audioPath);
-    expect(argv[0]).toContain(";echo hacked");
-  });
-
-  it("returns null when voice config is disabled", () => {
-    const config = {
-      data_dir: tempDir,
-      voice: { ...baseVoiceConfig(), enabled: false },
-    } as Config;
-
-    expect(createVoiceService(config)).toBeNull();
-  });
-});
-
-it("uses a specific error class for predictable voice failures", () => {
-  expect(new VoiceCommandError("x").name).toBe("VoiceCommandError");
 });

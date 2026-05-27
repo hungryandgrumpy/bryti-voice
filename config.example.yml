@@ -80,7 +80,7 @@ telegram:
 #   enabled: true
 #   allowed_users: []  # international format without + (e.g., 31612345678)
 
-# Threema Gateway (end-to-end encrypted, text-only in this branch)
+# Threema Gateway (end-to-end encrypted text and audio via Gateway callbacks)
 # threema:
 #   enabled: true
 #   gateway_id: "*YOURID"
@@ -92,6 +92,18 @@ telegram:
 #     host: "127.0.0.1"
 #     port: 8787
 #     path: "/threema/callback"
+
+# Self-hosted Bryti-specific encrypted web channel
+# web_e2ee:
+#   enabled: true
+#   listen_host: "127.0.0.1"
+#   listen_port: 8787
+#   public_origin: "https://bryti.tailnet.ts.net"
+#   allowed_origins:
+#     - "https://bryti.tailnet.ts.net"
+#   path_prefix: "/"
+#   pairing:
+#     invite_ttl_minutes: 10
 
 # ---------------------------------------------------------------------------
 # Model providers
@@ -183,33 +195,6 @@ tools:
 #   command_timeout_ms: 120000
 #   synthesized_audio_extension: ".ogg"
 #   max_tts_chars: 2500
-#
-# Example using an external helper script in a conda environment:
-# voice:
-#   enabled: true
-#   transcribe_command:
-#     - "conda"
-#     - "run"
-#     - "-n"
-#     - "whisper_env"
-#     - "python"
-#     - "/path/to/voice.py"
-#     - "transcribe"
-#     - "{input}"
-#     - "--output"
-#     - "{output}"
-#   synthesize_command:
-#     - "conda"
-#     - "run"
-#     - "-n"
-#     - "whisper_env"
-#     - "python"
-#     - "/path/to/voice.py"
-#     - "speak"
-#     - "{input}"
-#     - "--output"
-#     - "{output}"
-#   reply_with_voice: true
 
 # ---------------------------------------------------------------------------
 # Optional sections (uncomment to customize)

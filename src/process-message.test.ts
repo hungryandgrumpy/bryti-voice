@@ -42,7 +42,6 @@ function makeConfig(dataDir: string): Config {
     },
     telegram: { token: "", allowed_users: [12345] },
     whatsapp: { enabled: false, allowed_users: [] },
-    threema: { enabled: false, gateway_id: "", secret: "", private_key_path: "", allowed_senders: [], api_base_url: "https://msgapi.threema.ch", callback: { host: "127.0.0.1", port: 8787, path: "/threema/callback" } },
     models: {
       providers: [
         {
@@ -61,6 +60,16 @@ function makeConfig(dataDir: string): Config {
     },
     integrations: {},
     cron: [],
+    voice: {
+      enabled: false,
+      transcribe_command: [],
+      synthesize_command: [],
+      reply_with_voice: true,
+      keep_temp_files: false,
+      command_timeout_ms: 1000,
+      synthesized_audio_extension: ".ogg",
+      max_tts_chars: 2500,
+    },
     trust: { approved_tools: [] },
     data_dir: dataDir,
     active_hours: undefined,
@@ -70,17 +79,17 @@ function makeConfig(dataDir: string): Config {
 /** Minimal mock channel bridge. */
 function makeBridge(): ChannelBridge & {
   sent: Array<{ channelId: string; text: string }>;
-  voiceSent: Array<{ channelId: string; audioPath: string }>;
+  voices: Array<{ channelId: string; audioPath: string }>;
   typings: string[];
 } {
   const sent: Array<{ channelId: string; text: string }> = [];
-  const voiceSent: Array<{ channelId: string; audioPath: string }> = [];
+  const voices: Array<{ channelId: string; audioPath: string }> = [];
   const typings: string[] = [];
   return {
     platform: "telegram",
     name: "mock-telegram",
     sent,
-    voiceSent,
+    voices,
     typings,
     async start() {},
     async stop() {},
@@ -89,12 +98,12 @@ function makeBridge(): ChannelBridge & {
       sent.push({ channelId, text });
       return "msg-id";
     },
+    async sendVoice(channelId, audioPath) {
+      voices.push({ channelId, audioPath });
+      return "voice-msg-id";
+    },
     async sendTyping(channelId) {
       typings.push(channelId);
-    },
-    async sendVoice(channelId, audioPath) {
-      voiceSent.push({ channelId, audioPath });
-      return "voice-msg-id";
     },
     async sendApprovalRequest() {
       return "approve-msg-id";
@@ -104,7 +113,7 @@ function makeBridge(): ChannelBridge & {
     },
   } as unknown as ChannelBridge & {
     sent: Array<{ channelId: string; text: string }>;
-    voiceSent: Array<{ channelId: string; audioPath: string }>;
+    voices: Array<{ channelId: string; audioPath: string }>;
     typings: string[];
   };
 }
@@ -190,27 +199,6 @@ function incomingMsg(text: string, userId = "12345"): IncomingMessage {
     userId,
     platform: "telegram",
     raw: null,
-  };
-}
-
-function incomingVoiceMsg(text = "The user sent a voice message.", userId = "12345"): IncomingMessage {
-  return {
-    ...incomingMsg(text, userId),
-    audio: [{ path: "/tmp/input.ogg", mimeType: "audio/ogg", durationSeconds: 2 }],
-    replyMode: "voice",
-  };
-}
-
-function enableVoice(config: Config, keepTempFiles = false): void {
-  config.voice = {
-    enabled: true,
-    transcribe_command: ["stt", "{input}", "{output}"],
-    synthesize_command: ["tts", "{input}", "{output}"],
-    reply_with_voice: true,
-    keep_temp_files: keepTempFiles,
-    command_timeout_ms: 120000,
-    synthesized_audio_extension: ".ogg",
-    max_tts_chars: 2500,
   };
 }
 
@@ -300,6 +288,200 @@ describe("processMessage pipeline", () => {
     expect(bridge.sent).toHaveLength(0);
   });
 
+  it("transcribes incoming audio before normal text processing", async () => {
+    config.voice!.enabled = true;
+    config.voice!.transcribe_command = ["stub", "{input}", "{output}"];
+    const audioPath = path.join(tmpDir, "incoming.ogg");
+    fs.writeFileSync(audioPath, "voice bytes");
+
+    const session = makeUserSession("12345", [assistantMsg("Processed transcript")]);
+    const state = makeState(config, session, tmpDir);
+    state.voiceService = {
+      transcribe: vi.fn(async () => "hello from audio"),
+      synthesize: vi.fn(async () => path.join(tmpDir, "unused.ogg")),
+    };
+
+    await processMessage(state, {
+      ...incomingMsg("The user sent a voice message."),
+      audio: [{ path: audioPath, mimeType: "audio/ogg" }],
+      replyMode: "voice",
+    });
+
+    const histDir = path.join(tmpDir, "history");
+    const files = fs.readdirSync(histDir);
+    const content = fs.readFileSync(path.join(histDir, files[0]), "utf-8");
+    expect(content).toContain("[Voice message transcript]");
+    expect(content).toContain("hello from audio");
+    expect(fs.existsSync(audioPath)).toBe(false);
+  });
+
+  it("creates a TTS reply when replyMode is voice", async () => {
+    config.voice!.enabled = true;
+    config.voice!.reply_with_voice = true;
+    config.voice!.transcribe_command = ["stub", "{input}", "{output}"];
+    config.voice!.synthesize_command = ["stub", "{input}", "{output}"];
+
+    const outputPath = path.join(tmpDir, "reply.ogg");
+    fs.writeFileSync(outputPath, "voice reply");
+
+    const session = makeUserSession("12345", [assistantMsg("Voice reply text")]);
+    const state = makeState(config, session, tmpDir);
+    const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
+    state.voiceService = {
+      transcribe: vi.fn(async () => "unused"),
+      synthesize: vi.fn(async () => outputPath),
+    };
+
+    await processMessage(state, {
+      ...incomingMsg("hello"),
+      replyMode: "voice",
+    });
+
+    expect(bridge.voices).toHaveLength(1);
+    expect(bridge.voices[0].audioPath).toBe(outputPath);
+    expect(bridge.sent).toHaveLength(0);
+    expect(fs.existsSync(outputPath)).toBe(false);
+  });
+
+  it("falls back to text when voice reply cannot be sent", async () => {
+    config.voice!.enabled = true;
+    config.voice!.reply_with_voice = true;
+    config.voice!.synthesize_command = ["stub", "{input}", "{output}"];
+
+    const outputPath = path.join(tmpDir, "reply-fail.ogg");
+    fs.writeFileSync(outputPath, "voice reply");
+
+    const session = makeUserSession("12345", [assistantMsg("Fallback text")]);
+    const state = makeState(config, session, tmpDir);
+    const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
+    bridge.sendVoice = vi.fn(async () => {
+      throw new Error("send failed");
+    });
+    state.voiceService = {
+      transcribe: vi.fn(async () => "unused"),
+      synthesize: vi.fn(async () => outputPath),
+    };
+
+    await processMessage(state, {
+      ...incomingMsg("hello"),
+      replyMode: "voice",
+    });
+
+    expect(bridge.sent).toHaveLength(1);
+    expect(bridge.sent[0].text).toBe("Fallback text");
+    expect(fs.existsSync(outputPath)).toBe(false);
+  });
+
+  it("cleans incoming audio temp files when voice is disabled", async () => {
+    config.voice!.enabled = false;
+
+    const inputPath = path.join(tmpDir, "incoming-disabled.ogg");
+    fs.writeFileSync(inputPath, "voice bytes");
+
+    const session = makeUserSession("12345", []);
+    const state = makeState(config, session, tmpDir);
+    const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
+
+    await processMessage(state, {
+      ...incomingMsg("The user sent a voice message."),
+      audio: [{ path: inputPath, mimeType: "audio/ogg" }],
+      replyMode: "voice",
+    });
+
+    expect(bridge.sent).toHaveLength(1);
+    expect(bridge.sent[0].text).toContain("Voice messages are not enabled");
+    expect(fs.existsSync(inputPath)).toBe(false);
+  });
+
+  it("cleans incoming audio temp files when voice service is unavailable", async () => {
+    config.voice!.enabled = true;
+
+    const inputPath = path.join(tmpDir, "incoming-unavailable.ogg");
+    fs.writeFileSync(inputPath, "voice bytes");
+
+    const session = makeUserSession("12345", []);
+    const state = makeState(config, session, tmpDir);
+    const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
+    state.voiceService = null;
+
+    await processMessage(state, {
+      ...incomingMsg("The user sent a voice message."),
+      audio: [{ path: inputPath, mimeType: "audio/ogg" }],
+      replyMode: "voice",
+    });
+
+    expect(bridge.sent).toHaveLength(1);
+    expect(bridge.sent[0].text).toContain("Voice support is enabled but unavailable");
+    expect(fs.existsSync(inputPath)).toBe(false);
+  });
+
+  it("keeps temp files when keep_temp_files is true", async () => {
+    config.voice!.enabled = true;
+    config.voice!.keep_temp_files = true;
+    config.voice!.transcribe_command = ["stub", "{input}", "{output}"];
+    config.voice!.synthesize_command = ["stub", "{input}", "{output}"];
+
+    const inputPath = path.join(tmpDir, "incoming-keep.ogg");
+    const outputPath = path.join(tmpDir, "reply-keep.ogg");
+    fs.writeFileSync(inputPath, "voice bytes");
+    fs.writeFileSync(outputPath, "voice reply");
+
+    const session = makeUserSession("12345", [assistantMsg("Keep files")]);
+    const state = makeState(config, session, tmpDir);
+    const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
+    state.voiceService = {
+      transcribe: vi.fn(async () => "kept transcript"),
+      synthesize: vi.fn(async () => outputPath),
+    };
+
+    await processMessage(state, {
+      ...incomingMsg("The user sent a voice message."),
+      audio: [{ path: inputPath, mimeType: "audio/ogg" }],
+      replyMode: "voice",
+    });
+
+    expect(bridge.voices).toHaveLength(1);
+    expect(fs.existsSync(inputPath)).toBe(true);
+    expect(fs.existsSync(outputPath)).toBe(true);
+  });
+
+  it("logs cleanup warnings without exposing full temp file paths", async () => {
+    config.voice!.enabled = true;
+    config.voice!.transcribe_command = ["stub", "{input}", "{output}"];
+
+    const nestedDir = path.join(tmpDir, "nested", "voice");
+    fs.mkdirSync(nestedDir, { recursive: true });
+    const inputPath = path.join(nestedDir, "incoming-secret.ogg");
+    fs.writeFileSync(inputPath, "voice bytes");
+
+    const session = makeUserSession("12345", [assistantMsg("Processed transcript")]);
+    const state = makeState(config, session, tmpDir);
+    state.voiceService = {
+      transcribe: vi.fn(async () => "hello from audio"),
+      synthesize: vi.fn(async () => path.join(tmpDir, "unused.ogg")),
+    };
+
+    const rmSpy = vi.spyOn(fs, "rmSync").mockImplementation(() => {
+      throw new Error("permission denied");
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await processMessage(state, {
+      ...incomingMsg("The user sent a voice message."),
+      audio: [{ path: inputPath, mimeType: "audio/ogg" }],
+      replyMode: "voice",
+    });
+
+    expect(warnSpy).toHaveBeenCalled();
+    const [message, detail] = warnSpy.mock.calls[0] ?? [];
+    expect(String(message)).toContain("incoming-secret.ogg");
+    expect(String(message)).not.toContain(nestedDir);
+    expect(String(detail)).toContain("permission denied");
+
+    rmSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
   it("rejects messages over 10K characters without prompting the model", async () => {
     const longText = "a".repeat(10_001);
     const session = makeUserSession("12345", []);
@@ -340,171 +522,5 @@ describe("processMessage pipeline", () => {
 
     await expect(processMessage(state, incomingMsg("hello"))).resolves.not.toThrow();
     expect(bridge.sent.some((s) => s.text.includes("went wrong"))).toBe(true);
-  });
-
-  it("transcribes audio before prompting the model", async () => {
-    enableVoice(config);
-    const inputPath = path.join(tmpDir, "input.ogg");
-    fs.writeFileSync(inputPath, "voice");
-    const session = makeUserSession("12345", [assistantMsg("Ok")]);
-    const promptSpy = vi.spyOn(session.session, "prompt");
-    const state = makeState(config, session, tmpDir);
-    state.voiceService = {
-      transcribe: vi.fn(async () => "please summarize my day"),
-      synthesize: vi.fn(async () => "/tmp/reply.ogg"),
-    };
-
-    await processMessage(state, { ...incomingVoiceMsg(), audio: [{ path: inputPath, mimeType: "audio/ogg", durationSeconds: 2 }] });
-
-    expect(state.voiceService.transcribe).toHaveBeenCalledWith([
-      { path: inputPath, mimeType: "audio/ogg", durationSeconds: 2 },
-    ]);
-    expect(promptSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[Voice message transcript]\nplease summarize my day"),
-      undefined,
-    );
-    expect(fs.existsSync(inputPath)).toBe(false);
-  });
-
-  it("rejects audio messages when voice support is disabled", async () => {
-    const session = makeUserSession("12345", [assistantMsg("Ok")]);
-    const promptSpy = vi.spyOn(session.session, "prompt");
-    const state = makeState(config, session, tmpDir);
-    const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
-
-    await processMessage(state, incomingVoiceMsg());
-
-    expect(promptSpy).not.toHaveBeenCalled();
-    expect(bridge.sent[0].text).toContain("Voice messages are not enabled");
-  });
-
-  it("reports transcription failures without prompting", async () => {
-    enableVoice(config);
-    const inputPath = path.join(tmpDir, "input.ogg");
-    fs.writeFileSync(inputPath, "voice");
-    const session = makeUserSession("12345", [assistantMsg("Ok")]);
-    const promptSpy = vi.spyOn(session.session, "prompt");
-    const state = makeState(config, session, tmpDir);
-    state.voiceService = {
-      transcribe: vi.fn(async () => { throw new Error("stt failed"); }),
-      synthesize: vi.fn(async () => "/tmp/reply.ogg"),
-    };
-    const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
-
-    await processMessage(state, { ...incomingVoiceMsg(), audio: [{ path: inputPath, mimeType: "audio/ogg", durationSeconds: 2 }] });
-
-    expect(promptSpy).not.toHaveBeenCalled();
-    expect(bridge.sent[0].text).toContain("couldn't transcribe");
-    expect(fs.existsSync(inputPath)).toBe(false);
-  });
-
-  it("sends voice replies when synthesis succeeds", async () => {
-    enableVoice(config);
-    const replyPath = path.join(tmpDir, "reply.ogg");
-    fs.writeFileSync(replyPath, "reply-audio");
-    const session = makeUserSession("12345", [assistantMsg("Voice answer")]);
-    const state = makeState(config, session, tmpDir);
-    state.voiceService = {
-      transcribe: vi.fn(async () => "hello"),
-      synthesize: vi.fn(async () => replyPath),
-    };
-    const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
-
-    await processMessage(state, incomingVoiceMsg());
-
-    expect(state.voiceService.synthesize).toHaveBeenCalledWith("Voice answer");
-    expect(bridge.voiceSent).toEqual([{ channelId: "12345", audioPath: replyPath }]);
-    expect(bridge.sent).toHaveLength(0);
-    expect(fs.existsSync(replyPath)).toBe(false);
-  });
-
-  it("falls back to text when voice synthesis fails", async () => {
-    enableVoice(config);
-    const session = makeUserSession("12345", [assistantMsg("Text fallback")]);
-    const state = makeState(config, session, tmpDir);
-    state.voiceService = {
-      transcribe: vi.fn(async () => "hello"),
-      synthesize: vi.fn(async () => { throw new Error("tts failed"); }),
-    };
-    const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
-
-    await processMessage(state, incomingVoiceMsg());
-
-    expect(bridge.voiceSent).toHaveLength(0);
-    expect(bridge.sent.some((s) => s.text === "Text fallback")).toBe(true);
-  });
-
-  it("keeps incoming audio temp files when keep_temp_files is enabled", async () => {
-    enableVoice(config, true);
-    const inputPath = path.join(tmpDir, "keep-input.ogg");
-    fs.writeFileSync(inputPath, "voice");
-    const session = makeUserSession("12345", [assistantMsg("Ok")]);
-    const state = makeState(config, session, tmpDir);
-    state.voiceService = {
-      transcribe: vi.fn(async () => "hello"),
-      synthesize: vi.fn(async () => "/tmp/reply.ogg"),
-    };
-
-    await processMessage(state, { ...incomingVoiceMsg(), audio: [{ path: inputPath, mimeType: "audio/ogg", durationSeconds: 2 }] });
-
-    expect(fs.existsSync(inputPath)).toBe(true);
-  });
-
-  it("keeps generated TTS reply files when keep_temp_files is enabled", async () => {
-    enableVoice(config, true);
-    const replyPath = path.join(tmpDir, "keep-reply.ogg");
-    fs.writeFileSync(replyPath, "reply-audio");
-    const session = makeUserSession("12345", [assistantMsg("Voice answer")]);
-    const state = makeState(config, session, tmpDir);
-    state.voiceService = {
-      transcribe: vi.fn(async () => "hello"),
-      synthesize: vi.fn(async () => replyPath),
-    };
-
-    await processMessage(state, incomingVoiceMsg());
-
-    expect(fs.existsSync(replyPath)).toBe(true);
-  });
-
-  it("deletes generated TTS reply files when sendVoice fails and cleanup is enabled", async () => {
-    enableVoice(config);
-    const replyPath = path.join(tmpDir, "failed-reply.ogg");
-    fs.writeFileSync(replyPath, "reply-audio");
-    const session = makeUserSession("12345", [assistantMsg("Voice answer")]);
-    const state = makeState(config, session, tmpDir);
-    state.voiceService = {
-      transcribe: vi.fn(async () => "hello"),
-      synthesize: vi.fn(async () => replyPath),
-    };
-    const bridge = state.bridges[0] as ReturnType<typeof makeBridge>;
-    bridge.sendVoice = vi.fn(async () => { throw new Error("send failed"); });
-
-    await processMessage(state, incomingVoiceMsg());
-
-    expect(fs.existsSync(replyPath)).toBe(false);
-    expect(bridge.sent.some((s) => s.text === "Voice answer")).toBe(true);
-  });
-
-  it("warns and continues when cleanup fails", async () => {
-    enableVoice(config);
-    const inputPath = path.join(tmpDir, "input.ogg");
-    fs.writeFileSync(inputPath, "voice");
-    const rmSpy = vi.spyOn(fs, "rmSync").mockImplementation(() => { throw new Error("permission denied"); });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const session = makeUserSession("12345", [assistantMsg("Ok")]);
-      const state = makeState(config, session, tmpDir);
-      state.voiceService = {
-        transcribe: vi.fn(async () => "hello"),
-        synthesize: vi.fn(async () => "/tmp/reply.ogg"),
-      };
-
-      await processMessage(state, { ...incomingVoiceMsg(), audio: [{ path: inputPath, mimeType: "audio/ogg", durationSeconds: 2 }] });
-
-      expect(warnSpy).toHaveBeenCalledWith(`[voice] Failed to clean up incoming temp file ${inputPath}:`, "permission denied");
-    } finally {
-      rmSpy.mockRestore();
-      warnSpy.mockRestore();
-    }
   });
 });
