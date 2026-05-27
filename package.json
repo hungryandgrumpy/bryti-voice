@@ -30,7 +30,8 @@
     "clean": "rm -rf dist",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm test && npm run build"
+    "check": "npm test && npm run build",
+    "web-e2ee:invite": "npm run cli -- web-e2ee invite"
   },
   "engines": {
     "node": ">=22"

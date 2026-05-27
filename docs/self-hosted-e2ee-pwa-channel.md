@@ -434,9 +434,52 @@ Some synthetic/internal messages currently assume Telegram defaults in source, f
 - No plaintext transport/channel logs by default.
 - If debugging requires payload visibility later, it must be explicit and opt-in.
 
-## Operator note: creating pairing invites
+## Operator note: Tailscale Serve deployment and conflicts
 
-Current CLI flow:
+A working Tailscale-first setup for `web_e2ee` is:
+
+```yml
+web_e2ee:
+  enabled: true
+  listen_host: "127.0.0.1"
+  listen_port: 8787
+  public_origin: "https://your-machine.your-tailnet.ts.net"
+  allowed_origins:
+    - "https://your-machine.your-tailnet.ts.net"
+  path_prefix: "/"
+  pairing:
+    invite_ttl_minutes: 10
+```
+
+Recommended operator flow:
+
+1. Start Bryti so it listens on `127.0.0.1:8787`.
+2. Start Tailscale Serve in the background:
+
+```bash
+tailscale serve --bg 8787
+```
+
+3. Verify the Serve mapping:
+
+```bash
+tailscale serve status
+```
+
+Expected shape:
+
+```text
+https://your-machine.your-tailnet.ts.net (tailnet only)
+|-- / proxy http://127.0.0.1:8787
+```
+
+4. Open the Tailscale HTTPS URL in the browser, without `:8787`, for example:
+
+```text
+https://your-machine.your-tailnet.ts.net/
+```
+
+5. Create a pairing invite:
 
 ```bash
 npm run cli -- web-e2ee invite
@@ -445,6 +488,102 @@ node dist/cli.js web-e2ee invite
 ```
 
 This prints the plaintext invite code once plus its expiry timestamp. The persisted invite store at `data/web-e2ee/invites.json` stores hash/state metadata only and does not store the plaintext invite code.
+
+### Foreground vs background Serve
+
+`tailscale serve 8787` runs in the foreground and prints `Press Ctrl+C to exit.`
+That is useful for quick testing, but `tailscale serve status` may not reflect the setup the same way as a backgrounded Serve config.
+
+For repeatable operator setup, prefer:
+
+```bash
+tailscale serve --bg 8787
+```
+
+### Troubleshooting: page shows `Pair device` but pairing says `Could not load server info: Failed to fetch`
+
+If the browser shows the shell UI but the pairing panel reports:
+
+```text
+Could not load server info: Failed to fetch
+```
+
+then the most common causes are:
+
+- Tailscale Serve is not currently active
+- the browser is loading an old cached shell, but `/api/server-info` is failing
+- the public HTTPS endpoint is colliding with another local service already bound to port `443`
+
+Check the local Bryti listener first:
+
+```bash
+curl http://127.0.0.1:8787/api/server-info
+```
+
+If this succeeds locally but the browser URL still fails, inspect Serve and local port usage:
+
+```bash
+tailscale serve status
+lsof -nP -iTCP:443 -sTCP:LISTEN
+```
+
+A frequent cause on developer machines is Docker publishing `0.0.0.0:443`, for example via a Caddy, Traefik, or nginx container. In that situation, Bryti itself may be healthy on `127.0.0.1:8787`, but the Tailscale HTTPS entrypoint can fail at TLS handshake time before Bryti ever receives the request.
+
+### Avoiding `:443` conflicts with Docker or other local HTTPS services
+
+If another service already owns host port `443`, either stop/reconfigure that service or move Tailscale Serve to another HTTPS port.
+
+Example fallback:
+
+```bash
+tailscale serve --bg --https=8443 http://127.0.0.1:8787
+```
+
+Then open:
+
+```text
+https://your-machine.your-tailnet.ts.net:8443/
+```
+
+Important: when using a non-default HTTPS port such as `8443`, `public_origin` and `allowed_origins` must match the browser origin exactly, including the port:
+
+```yml
+web_e2ee:
+  enabled: true
+  listen_host: "127.0.0.1"
+  listen_port: 8787
+  public_origin: "https://your-machine.your-tailnet.ts.net:8443"
+  allowed_origins:
+    - "https://your-machine.your-tailnet.ts.net:8443"
+  path_prefix: "/"
+```
+
+After changing `public_origin` or `allowed_origins`, restart Bryti before testing again.
+
+### Troubleshooting checklist for Docker-heavy machines
+
+If `curl https://your-machine.your-tailnet.ts.net/` fails with a TLS handshake error while `curl http://127.0.0.1:8787/api/server-info` works, check for these conditions:
+
+- Docker container publishing `:443`
+- local reverse proxy container with broken or expired TLS state
+- another HTTPS development stack already bound to `:443`
+- stale Tailscale Serve configuration from earlier tests
+
+Useful commands:
+
+```bash
+docker ps
+tailscale serve status
+lsof -nP -iTCP:443 -sTCP:LISTEN
+curl -vk https://your-machine.your-tailnet.ts.net/
+```
+
+If needed, reset and recreate the Serve configuration:
+
+```bash
+tailscale serve reset
+tailscale serve --bg 8787
+```
 
 ## Summary
 

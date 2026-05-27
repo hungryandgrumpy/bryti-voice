@@ -33,3 +33,8 @@ plans/
 
 # Node version manager
 .nvmrc
+
+# Any key or secret
+*.key
+*.secret
+*.crt
