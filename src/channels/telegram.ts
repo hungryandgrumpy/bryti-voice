@@ -26,6 +26,7 @@ import {
   isRetryableGetFileError,
   isFileTooBigError,
 } from "./telegram-network-errors.js";
+import { fetchWithTimeout } from "../util/timeout.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -136,6 +137,7 @@ const RETRY_BASE_DELAY_MS = 1000;
  * 600 ms gives headroom without noticeable latency.
  */
 const MEDIA_GROUP_FLUSH_MS = 600;
+const TELEGRAM_FILE_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 interface MediaGroupEntry {
   images: Array<{ data: string; mimeType: string }>;
@@ -506,6 +508,11 @@ export class TelegramBridge implements ChannelBridge {
     // Handle inline keyboard callbacks for approval requests.
     // Callback data format: "approval:<key>:<result>"
     this.bot.on("callback_query:data", async (ctx) => {
+      if (!this.isAllowed(ctx)) {
+        await ctx.answerCallbackQuery({ text: "Not authorized", show_alert: true });
+        return;
+      }
+
       const data = ctx.callbackQuery.data;
       if (!data.startsWith("a:")) {
         await ctx.answerCallbackQuery();
@@ -837,7 +844,7 @@ export class TelegramBridge implements ChannelBridge {
 
     try {
       const url = `https://api.telegram.org/file/bot${this.botToken}/${filePath}`;
-      const response = await fetch(url);
+      const response = await fetchWithTimeout(url, { timeoutMs: TELEGRAM_FILE_DOWNLOAD_TIMEOUT_MS });
       if (!response.ok) {
         console.error(`[telegram] Photo download failed: HTTP ${response.status}`);
         return null;
@@ -953,7 +960,7 @@ export class TelegramBridge implements ChannelBridge {
 
     try {
       const url = `https://api.telegram.org/file/bot${this.botToken}/${filePath}`;
-      const response = await fetch(url);
+      const response = await fetchWithTimeout(url, { timeoutMs: TELEGRAM_FILE_DOWNLOAD_TIMEOUT_MS });
       if (!response.ok) {
         console.error(`[telegram] Document download failed: HTTP ${response.status}`);
         return null;

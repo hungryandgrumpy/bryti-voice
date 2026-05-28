@@ -17,6 +17,7 @@
 import { completeSimple } from "@mariozechner/pi-ai";
 import type { Config } from "../config.js";
 import { createModelInfra, resolveFirstModel, type ModelInfra } from "../model-infra.js";
+import { withTimeout } from "../util/timeout.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -171,18 +172,22 @@ export async function evaluateToolCall(
     if (!auth.ok) {
       return { verdict: "ASK", reason: `Auth error for guardrail model: ${auth.error}` };
     }
-    const result = await completeSimple(model, {
-      systemPrompt: GUARDRAIL_SYSTEM_PROMPT,
-      messages: [{
-        role: "user" as const,
-        content: userPrompt,
-        timestamp: Date.now(),
-      }],
-    }, {
-      maxTokens: 100,
-      apiKey: auth.apiKey,
-      headers: auth.headers,
-    });
+    const result = await withTimeout(
+      completeSimple(model, {
+        systemPrompt: GUARDRAIL_SYSTEM_PROMPT,
+        messages: [{
+          role: "user" as const,
+          content: userPrompt,
+          timestamp: Date.now(),
+        }],
+      }, {
+        maxTokens: 100,
+        apiKey: auth.apiKey,
+        headers: auth.headers,
+      }),
+      30_000,
+      "Guardrail LLM call",
+    );
 
     if (result.stopReason === "error") {
       console.warn(`[guardrail] LLM error: ${result.errorMessage ?? "unknown"}`);

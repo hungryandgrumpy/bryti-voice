@@ -43,10 +43,24 @@ export default function (pi: ExtensionAPI) {
 
 Anything Node.js supports:
 
-- `fetch()` for HTTP requests
+- `fetch()` for HTTP requests. Always wrap it with an `AbortController` timeout, see the helper below.
 - `process.env.MY_VAR` for secrets and config (set in .env)
 - `node:fs`, `node:path`, `node:child_process` for local system access
 - Any npm package if you install it in `data/files/extensions/`
+
+### Fetch timeout helper
+
+```typescript
+async function fetchWithTimeout(input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1] = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+```
 
 ## Returning results
 

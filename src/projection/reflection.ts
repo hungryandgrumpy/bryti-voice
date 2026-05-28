@@ -23,6 +23,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { completeSimple } from "@mariozechner/pi-ai";
+import { withTimeout } from "../util/timeout.js";
 import type { Config } from "../config.js";
 import type { ProjectionResolution, ProjectionStore } from "./store.js";
 import { createProjectionStore } from "./store.js";
@@ -294,11 +295,15 @@ export async function sdkComplete(
   if (!auth.ok) {
     throw new Error(`Reflection auth error: ${auth.error}`);
   }
-  const result = await completeSimple(model, context, {
-    maxTokens: 1024,
-    apiKey: auth.apiKey,
-    headers: auth.headers,
-  });
+  const result = await withTimeout(
+    completeSimple(model, context, {
+      maxTokens: 1024,
+      apiKey: auth.apiKey,
+      headers: auth.headers,
+    }),
+    60_000,
+    "Reflection LLM call",
+  );
 
   if (result.stopReason === "error") {
     throw new Error(`Reflection LLM error: ${result.errorMessage ?? "unknown"}`);
