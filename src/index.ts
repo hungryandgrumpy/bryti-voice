@@ -43,11 +43,12 @@ import {
 } from "./process-message.js";
 import { createCoreMemory } from "./memory/core-memory.js";
 import { createHistoryManager } from "./history.js";
-import { warmupEmbeddings, disposeEmbeddings } from "./memory/embeddings.js";
+import { configureEmbeddings, warmupEmbeddings, disposeEmbeddings } from "./memory/embeddings.js";
 import { TelegramBridge } from "./channels/telegram.js";
 import { WhatsAppBridge } from "./channels/whatsapp.js";
 import { ThreemaBridge } from "./channels/threema.js";
 import { WebE2EEBridge } from "./channels/web_e2ee.js";
+import { withDurableOutbound } from "./channels/outbound-queue.js";
 import { createScheduler } from "./scheduler.js";
 import { MessageQueue } from "./message-queue.js";
 import type { IncomingMessage, ChannelBridge } from "./channels/types.js";
@@ -101,9 +102,10 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
   // Fire-and-forget: never blocks startup.
   void checkForUpdate(BRYTI_VERSION, config.data_dir);
 
-  // Pre-load embedding model (best-effort: keyword search still works without it)
+  // Pre-load embedding provider (best-effort: keyword search still works without it)
+  configureEmbeddings(config.memory.embeddings);
   const modelsDir = path.join(config.data_dir, ".models");
-  console.log("Loading embedding model (downloading on first run)...");
+  console.log(`Loading embedding provider (${config.memory.embeddings.provider})...`);
   await warmupEmbeddings(modelsDir);
   const { embeddingsAvailable } = await import("./memory/embeddings.js");
   if (embeddingsAvailable()) {
@@ -128,12 +130,12 @@ async function startApp(onRequestRestart?: () => void): Promise<RunningApp> {
       console.warn("[telegram] WARNING: allowed_users is empty. No users will be able to interact with the bot. Add Telegram user IDs to config.");
     }
     const telegram = new TelegramBridge(config.telegram.token, config.telegram.allowed_users);
-    bridges.push(telegram);
+    bridges.push(withDurableOutbound(telegram, config.data_dir));
   }
 
   if (config.whatsapp.enabled) {
     const whatsapp = new WhatsAppBridge(config.data_dir, config.whatsapp.allowed_users);
-    bridges.push(whatsapp);
+    bridges.push(withDurableOutbound(whatsapp, config.data_dir));
   }
 
   if (config.threema.enabled) {
