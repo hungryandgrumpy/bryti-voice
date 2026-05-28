@@ -16,7 +16,7 @@ docs/internal/
 
 # Test artifacts
 .test-data/
-.pi/todos/
+.pi/
 
 # Build outputs
 *.tsbuildinfo/
