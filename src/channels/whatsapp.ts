@@ -18,12 +18,16 @@ import makeWASocket, {
 import { Boom } from "@hapi/boom";
 import qrcode from "qrcode-terminal";
 import type { ApprovalResult, ChannelBridge, IncomingMessage, SendOpts } from "./types.js";
+import { withTimeout } from "../util/timeout.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
 // WhatsApp message limit (chars). Actual limit is ~65536 but long messages
 // are unreadable. Split at a practical limit.
 const MAX_MESSAGE_LENGTH = 4000;
+const WHATSAPP_CONNECT_TIMEOUT_MS = 60_000;
+const WHATSAPP_SEND_TIMEOUT_MS = 30_000;
+const WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 export class WhatsAppBridge implements ChannelBridge {
   readonly name = "whatsapp";
@@ -37,8 +41,9 @@ export class WhatsAppBridge implements ChannelBridge {
   private shouldReconnect = true;
   private reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 10;
-  /** Pending text-based approvals: approvalKey → resolve */
-  private pendingApprovals: Map<string, (result: ApprovalResult) => void> = new Map();
+  /** Pending approvals: approvalKey → request state. */
+  private pendingApprovals: Map<string, { resolve: (result: ApprovalResult) => void; messageId?: string }> = new Map();
+  private approvalByMessageId: Map<string, string> = new Map();
 
   /**
    * @param dataDir Base data directory (auth state stored in dataDir/whatsapp-auth/)
@@ -113,6 +118,12 @@ export class WhatsAppBridge implements ChannelBridge {
       }
     });
 
+    (this.socket.ev as any).on("messages.reaction", (reactions: unknown[]) => {
+      for (const reaction of reactions) {
+        this.handleReactionApproval(reaction);
+      }
+    });
+
     this.socket.ev.on("messages.upsert", async ({ messages, type }) => {
       if (type !== "notify") return;
 
@@ -123,6 +134,10 @@ export class WhatsAppBridge implements ChannelBridge {
 
         // Skip our own messages
         if (msg.key.fromMe) continue;
+
+        if (this.handleReactionApproval(msg)) {
+          continue;
+        }
 
         // Extract text from various message types
         const isImageMessage = !!msg.message?.imageMessage;
@@ -147,7 +162,11 @@ export class WhatsAppBridge implements ChannelBridge {
         let images: Array<{ data: string; mimeType: string }> | undefined;
         if (isImageMessage && this.socket) {
           try {
-            const buf = await downloadMediaMessage(msg, "buffer", {});
+            const buf = await withTimeout(
+              downloadMediaMessage(msg, "buffer", {}),
+              WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS,
+              "WhatsApp media download",
+            );
             const mimeType = msg.message?.imageMessage?.mimetype ?? "image/jpeg";
             images = [{ data: buf.toString("base64"), mimeType }];
           } catch (err) {
@@ -178,12 +197,11 @@ export class WhatsAppBridge implements ChannelBridge {
       }
     });
 
-    // Wait for the connection to open. No timeout — QR scanning + the initial
-    // WhatsApp sync can take a while on a phone. The promise resolves as soon
-    // as the connection is "open", or if the socket closes without ever
-    // connecting (e.g. loggedOut), in which case startup continues anyway
-    // and the reconnect logic takes over.
-    await new Promise<void>((resolve) => {
+    // Wait for the connection to open, but do not let startup hang forever.
+    // QR scanning can take a while, so timeout only logs and lets reconnect
+    // logic continue in the background.
+    try {
+      await withTimeout(new Promise<void>((resolve) => {
       const onUpdate = (update: { connection?: string }) => {
         if (update.connection === "open" || update.connection === "close") {
           this.socket?.ev.off("connection.update", onUpdate);
@@ -195,8 +213,11 @@ export class WhatsAppBridge implements ChannelBridge {
         resolve();
         return;
       }
-      this.socket!.ev.on("connection.update", onUpdate);
-    });
+        this.socket!.ev.on("connection.update", onUpdate);
+      }), WHATSAPP_CONNECT_TIMEOUT_MS, "WhatsApp connect");
+    } catch (error) {
+      console.warn(`[whatsapp] Initial connection wait timed out: ${(error as Error).message}`);
+    }
   }
 
   async stop(): Promise<void> {
@@ -218,7 +239,11 @@ export class WhatsAppBridge implements ChannelBridge {
 
     let lastMessageId = "";
     for (const chunk of chunks) {
-      const sent = await this.socket.sendMessage(channelId, { text: chunk });
+      const sent = await withTimeout(
+        this.socket.sendMessage(channelId, { text: chunk }),
+        WHATSAPP_SEND_TIMEOUT_MS,
+        "WhatsApp sendMessage",
+      );
       lastMessageId = sent?.key?.id ?? "";
 
       // Small delay between chunks to avoid rate limiting
@@ -238,7 +263,11 @@ export class WhatsAppBridge implements ChannelBridge {
   async sendTyping(channelId: string): Promise<void> {
     if (!this.socket || this.connectionState !== "open") return;
     try {
-      await this.socket.sendPresenceUpdate("composing", channelId);
+      await withTimeout(
+        this.socket.sendPresenceUpdate("composing", channelId),
+        WHATSAPP_SEND_TIMEOUT_MS,
+        "WhatsApp sendPresenceUpdate",
+      );
     } catch {
       // Best-effort typing indicator
     }
@@ -256,17 +285,20 @@ export class WhatsAppBridge implements ChannelBridge {
   ): Promise<ApprovalResult> {
     // WhatsApp has no inline buttons for non-Business accounts.
     // Fall back to text instructions; parse the next message from this user.
-    await this.sendMessage(
+    const messageId = await this.sendMessage(
       channelId,
-      `${prompt}\n\nReply *YES* to allow once, *ALWAYS* to always allow, or *NO* to deny.`,
+      `${prompt}\n\nReply *YES* to allow once, *ALWAYS* to always allow, or *NO* to deny. React 👍 to allow once, ⭐ to always allow, or 👎 to deny.`,
     );
 
     return new Promise<ApprovalResult>((resolve) => {
-      this.pendingApprovals.set(approvalKey, resolve);
+      this.pendingApprovals.set(approvalKey, { resolve, messageId });
+      if (messageId) this.approvalByMessageId.set(messageId, approvalKey);
 
       setTimeout(async () => {
         if (this.pendingApprovals.has(approvalKey)) {
+          const pending = this.pendingApprovals.get(approvalKey);
           this.pendingApprovals.delete(approvalKey);
+          if (pending?.messageId) this.approvalByMessageId.delete(pending.messageId);
           resolve("deny");
           try {
             await this.sendMessage(channelId, "Permission request expired (auto-denied).");
@@ -294,10 +326,42 @@ export class WhatsAppBridge implements ChannelBridge {
     else return false;
 
     // Resolve the oldest pending approval
-    const [key, resolve] = this.pendingApprovals.entries().next().value as [string, (r: ApprovalResult) => void];
-    this.pendingApprovals.delete(key);
-    resolve(result);
+    const [key, pending] = this.pendingApprovals.entries().next().value as [string, { resolve: (r: ApprovalResult) => void; messageId?: string }];
+    this.resolveApproval(key, pending, result);
     return true;
+  }
+
+  private handleReactionApproval(raw: unknown): boolean {
+    const event = raw as any;
+    const reaction = event.reaction ?? event.message?.reactionMessage;
+    const targetId = reaction?.key?.id;
+    if (!targetId || typeof targetId !== "string") return false;
+
+    const approvalKey = this.approvalByMessageId.get(targetId);
+    if (!approvalKey) return false;
+
+    const pending = this.pendingApprovals.get(approvalKey);
+    if (!pending) return false;
+
+    const emoji = String(reaction.text ?? "").trim();
+    let result: ApprovalResult | null = null;
+    if (["👍", "✅"].includes(emoji)) result = "allow";
+    else if (["⭐", "🌟", "❤️", "❤"].includes(emoji)) result = "allow_always";
+    else if (["👎", "❌", "🚫"].includes(emoji)) result = "deny";
+    if (!result) return false;
+
+    this.resolveApproval(approvalKey, pending, result);
+    return true;
+  }
+
+  private resolveApproval(
+    approvalKey: string,
+    pending: { resolve: (result: ApprovalResult) => void; messageId?: string },
+    result: ApprovalResult,
+  ): void {
+    this.pendingApprovals.delete(approvalKey);
+    if (pending.messageId) this.approvalByMessageId.delete(pending.messageId);
+    pending.resolve(result);
   }
 }
 

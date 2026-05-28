@@ -26,7 +26,7 @@ import {
   isRetryableGetFileError,
   isFileTooBigError,
 } from "./telegram-network-errors.js";
-import { fetchWithTimeout } from "../util/timeout.js";
+import { fetchWithTimeout, withTimeout } from "../util/timeout.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -137,6 +137,7 @@ const RETRY_BASE_DELAY_MS = 1000;
  * 600 ms gives headroom without noticeable latency.
  */
 const MEDIA_GROUP_FLUSH_MS = 600;
+const TELEGRAM_API_TIMEOUT_MS = 30_000;
 const TELEGRAM_FILE_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 interface MediaGroupEntry {
@@ -610,7 +611,7 @@ export class TelegramBridge implements ChannelBridge {
     for (const chunk of chunks) {
       try {
         const message = await withRetry(() =>
-          bot.api.sendMessage(chatId, chunk, { parse_mode: "HTML" }),
+          withTimeout(bot.api.sendMessage(chatId, chunk, { parse_mode: "HTML" }), TELEGRAM_API_TIMEOUT_MS, "Telegram sendMessage"),
         );
         lastMessageId = String(message.message_id);
       } catch (error) {
@@ -620,7 +621,7 @@ export class TelegramBridge implements ChannelBridge {
           console.warn("HTML parse failed, falling back to plain text:", err.description);
           const plain = chunk.replace(/<[^>]+>/g, "");
           const message = await withRetry(() =>
-            bot.api.sendMessage(chatId, plain),
+            withTimeout(bot.api.sendMessage(chatId, plain), TELEGRAM_API_TIMEOUT_MS, "Telegram sendMessage"),
           );
           lastMessageId = String(message.message_id);
         } else {
@@ -653,9 +654,13 @@ export class TelegramBridge implements ChannelBridge {
 
     try {
       await withRetry(() =>
-        bot.api.editMessageText(chatId, msgId, markdownToHtml(text), {
-          parse_mode: "HTML",
-        }),
+        withTimeout(
+          bot.api.editMessageText(chatId, msgId, markdownToHtml(text), {
+            parse_mode: "HTML",
+          }),
+          TELEGRAM_API_TIMEOUT_MS,
+          "Telegram editMessageText",
+        ),
       );
     } catch (error) {
       // Ignore "message is not modified" errors
@@ -667,7 +672,7 @@ export class TelegramBridge implements ChannelBridge {
   }
 
   async sendTyping(channelId: string): Promise<void> {
-    // Don't wait for bot during typing — it's cosmetic. Just skip silently.
+    // Don't wait for bot during typing, it's cosmetic. Just skip silently.
     if (!this.bot) return;
 
     // If already typing, don't start another interval
@@ -679,7 +684,7 @@ export class TelegramBridge implements ChannelBridge {
 
     // Send initial typing action
     try {
-      await this.bot.api.sendChatAction(chatId, "typing");
+      await withTimeout(this.bot.api.sendChatAction(chatId, "typing"), TELEGRAM_API_TIMEOUT_MS, "Telegram sendChatAction");
     } catch {
       // Ignore errors
     }
@@ -688,7 +693,7 @@ export class TelegramBridge implements ChannelBridge {
     const interval = setInterval(async () => {
       try {
         if (this.bot) {
-          await this.bot.api.sendChatAction(chatId, "typing");
+          await withTimeout(this.bot.api.sendChatAction(chatId, "typing"), TELEGRAM_API_TIMEOUT_MS, "Telegram sendChatAction");
         }
       } catch {
         // Stop on error
@@ -739,10 +744,14 @@ export class TelegramBridge implements ChannelBridge {
       .text("✗ Deny", `a:${shortKey}:deny`);
 
     await withRetry(() =>
-      bot.api.sendMessage(parseInt(channelId, 10), prompt, {
-        parse_mode: "HTML",
-        reply_markup: keyboard,
-      }),
+      withTimeout(
+        bot.api.sendMessage(parseInt(channelId, 10), prompt, {
+          parse_mode: "HTML",
+          reply_markup: keyboard,
+        }),
+        TELEGRAM_API_TIMEOUT_MS,
+        "Telegram approval sendMessage",
+      ),
     );
 
     return new Promise<ApprovalResult>((resolve) => {
@@ -755,9 +764,13 @@ export class TelegramBridge implements ChannelBridge {
           resolve("deny");
           try {
             await withRetry(() =>
-              this.bot!.api.sendMessage(
-                parseInt(channelId, 10),
-                "⏱ Permission request expired (auto-denied).",
+              withTimeout(
+                this.bot!.api.sendMessage(
+                  parseInt(channelId, 10),
+                  "⏱ Permission request expired (auto-denied).",
+                ),
+                TELEGRAM_API_TIMEOUT_MS,
+                "Telegram approval timeout sendMessage",
               ),
             );
           } catch {

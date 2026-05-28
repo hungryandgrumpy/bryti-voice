@@ -125,6 +125,29 @@ models:
           context_window: 200000
           max_tokens: 64000
 
+    # OpenAI API key, uncomment to use direct OpenAI models.
+    # - name: openai
+    #   base_url: https://api.openai.com/v1
+    #   api: openai-responses
+    #   api_key: ${OPENAI_API_KEY}
+    #   models:
+    #     - id: "gpt-5.1"
+    #       context_window: 400000
+    #       max_tokens: 128000
+    #     - id: "gpt-5.1-codex-mini"
+    #       context_window: 400000
+    #       max_tokens: 128000
+
+    # Any OpenAI-compatible chat endpoint.
+    # - name: local-openai
+    #   base_url: http://127.0.0.1:11434/v1
+    #   api: openai-completions
+    #   api_key: ${LOCAL_OPENAI_API_KEY}
+    #   models:
+    #     - id: "qwen3:8b"
+    #       context_window: 32768
+    #       max_tokens: 8192
+
     # Free models via opencode.ai (no key needed)
     - name: opencode
       base_url: https://opencode.ai/zen/v1
