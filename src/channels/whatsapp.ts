@@ -15,12 +15,17 @@ import makeWASocket, {
   type WASocket,
   DisconnectReason,
 } from "@whiskeysockets/baileys";
+import type { ILogger } from "@whiskeysockets/baileys/lib/Utils/logger.js";
 import { Boom } from "@hapi/boom";
 import qrcode from "qrcode-terminal";
 import type { ApprovalResult, ChannelBridge, IncomingMessage, SendOpts } from "./types.js";
 import { withTimeout } from "../util/timeout.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
+type PendingApproval = { resolve: (result: ApprovalResult) => void; messageId?: string };
+type BaileysReaction = { key?: { id?: unknown }; text?: unknown };
+type BaileysReactionEvent = { reaction?: BaileysReaction; message?: { reactionMessage?: BaileysReaction } };
+type ReactionEmitter = { on(event: "messages.reaction", listener: (reactions: unknown[]) => void): void };
 
 // WhatsApp message limit (chars). Actual limit is ~65536 but long messages
 // are unreadable. Split at a practical limit.
@@ -41,13 +46,13 @@ export class WhatsAppBridge implements ChannelBridge {
   private shouldReconnect = true;
   private reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 10;
-  /** Pending approvals: approvalKey → request state. */
-  private pendingApprovals: Map<string, { resolve: (result: ApprovalResult) => void; messageId?: string }> = new Map();
+  /** Pending approvals keyed by the trust approval id. */
+  private pendingApprovals: Map<string, PendingApproval> = new Map();
   private approvalByMessageId: Map<string, string> = new Map();
 
   /**
    * @param dataDir Base data directory (auth state stored in dataDir/whatsapp-auth/)
-   * @param allowedUsers Phone numbers in international format without +, e.g. ["31612345678"]
+   * @param allowedUsers Phone numbers in international format without +, for example ["31612345678"]
    */
   constructor(dataDir: string, allowedUsers: string[] = []) {
     this.dataDir = dataDir;
@@ -64,21 +69,20 @@ export class WhatsAppBridge implements ChannelBridge {
     const authDir = `${this.dataDir}/whatsapp-auth`;
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-    const silentLogger = {
+    const silentLogger: ILogger = {
       level: "silent",
       info: () => {},
       warn: () => {},
-      error: (...args: unknown[]) => console.error("[whatsapp:baileys]", ...args),
+      error: (obj: unknown, msg?: string) => console.error("[whatsapp:baileys]", msg ?? obj),
       debug: () => {},
       trace: () => {},
-      fatal: (...args: unknown[]) => console.error("[whatsapp:baileys:fatal]", ...args),
       child: () => silentLogger,
     };
 
     this.socket = makeWASocket({
       auth: state,
       browser: ["Bryti", "Chrome", "22.0"],
-      logger: silentLogger as any,
+      logger: silentLogger,
     });
 
     this.socket.ev.on("creds.update", saveCreds);
@@ -118,7 +122,7 @@ export class WhatsAppBridge implements ChannelBridge {
       }
     });
 
-    (this.socket.ev as any).on("messages.reaction", (reactions: unknown[]) => {
+    (this.socket.ev as ReactionEmitter).on("messages.reaction", (reactions: unknown[]) => {
       for (const reaction of reactions) {
         this.handleReactionApproval(reaction);
       }
@@ -201,20 +205,23 @@ export class WhatsAppBridge implements ChannelBridge {
     // QR scanning can take a while, so timeout only logs and lets reconnect
     // logic continue in the background.
     try {
-      await withTimeout(new Promise<void>((resolve) => {
-      const onUpdate = (update: { connection?: string }) => {
-        if (update.connection === "open" || update.connection === "close") {
-          this.socket?.ev.off("connection.update", onUpdate);
-          resolve();
-        }
-      };
-      // If already open (shouldn't happen on first connect but just in case)
-      if (this.connectionState === "open") {
-        resolve();
-        return;
-      }
-        this.socket!.ev.on("connection.update", onUpdate);
-      }), WHATSAPP_CONNECT_TIMEOUT_MS, "WhatsApp connect");
+      await withTimeout(
+        new Promise<void>((resolve) => {
+          const onUpdate = (update: { connection?: string }) => {
+            if (update.connection === "open" || update.connection === "close") {
+              this.socket?.ev.off("connection.update", onUpdate);
+              resolve();
+            }
+          };
+          if (this.connectionState === "open") {
+            resolve();
+            return;
+          }
+          this.socket?.ev.on("connection.update", onUpdate);
+        }),
+        WHATSAPP_CONNECT_TIMEOUT_MS,
+        "WhatsApp connect",
+      );
     } catch (error) {
       console.warn(`[whatsapp] Initial connection wait timed out: ${(error as Error).message}`);
     }
@@ -326,13 +333,13 @@ export class WhatsAppBridge implements ChannelBridge {
     else return false;
 
     // Resolve the oldest pending approval
-    const [key, pending] = this.pendingApprovals.entries().next().value as [string, { resolve: (r: ApprovalResult) => void; messageId?: string }];
+    const [key, pending] = this.pendingApprovals.entries().next().value as [string, PendingApproval];
     this.resolveApproval(key, pending, result);
     return true;
   }
 
   private handleReactionApproval(raw: unknown): boolean {
-    const event = raw as any;
+    const event = raw as BaileysReactionEvent;
     const reaction = event.reaction ?? event.message?.reactionMessage;
     const targetId = reaction?.key?.id;
     if (!targetId || typeof targetId !== "string") return false;
@@ -356,7 +363,7 @@ export class WhatsAppBridge implements ChannelBridge {
 
   private resolveApproval(
     approvalKey: string,
-    pending: { resolve: (result: ApprovalResult) => void; messageId?: string },
+    pending: PendingApproval,
     result: ApprovalResult,
   ): void {
     this.pendingApprovals.delete(approvalKey);

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withDurableOutbound } from "./outbound-queue.js";
+import { DurableOutboundBridge, withDurableOutbound } from "./outbound-queue.js";
 import type { ApprovalResult, ChannelBridge, IncomingMessage, Platform, SendOpts } from "./types.js";
 
 class FakeBridge implements ChannelBridge {
@@ -81,5 +81,22 @@ describe("DurableOutboundBridge", () => {
     expect(inner.sent.some((msg) => msg.text === "hello")).toBe(true);
     expect(queuedFiles()).toEqual([]);
     await restarted.stop();
+  });
+
+  it("ignores malformed queued records", async () => {
+    const { inner } = make();
+    const queueDir = path.join(tmpDir!, "pending", "outbound", "telegram");
+    fs.mkdirSync(queueDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(queueDir, "bad.json"),
+      JSON.stringify({ id: "../../escape", platform: "telegram", channelId: "123", text: "bad" }),
+    );
+
+    const bridge = new DurableOutboundBridge(inner, tmpDir!, 1);
+    await bridge.start();
+
+    expect(inner.sent).toEqual([]);
+    expect(queuedFiles()).toEqual(["bad.json"]);
+    await bridge.stop();
   });
 });

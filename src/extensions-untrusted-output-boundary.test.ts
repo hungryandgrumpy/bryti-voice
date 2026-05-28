@@ -14,9 +14,9 @@ describe("untrusted output boundary extension", () => {
       getAllTools() {
         return tools;
       },
-    } as unknown as ExtensionAPI;
+    } as Pick<ExtensionAPI, "on" | "getAllTools">;
 
-    untrustedOutputBoundary(pi);
+    untrustedOutputBoundary(pi as ExtensionAPI);
     if (!handler) throw new Error("tool_result handler was not registered");
     return handler;
   }
@@ -59,10 +59,10 @@ describe("untrusted output boundary extension", () => {
     } as never, {} as never);
 
     expect(result).toEqual({
-      content: [{
+      content: [expect.objectContaining({
         type: "text",
-        text: expect.stringContaining("<<<BRYTI_UNTRUSTED_EXTENSION_OUTPUT_BEGIN>>>") as unknown as string,
-      }],
+        text: expect.stringContaining("<<<BRYTI_UNTRUSTED_EXTENSION_OUTPUT_BEGIN>>>"),
+      })],
     });
     const text = (result as { content: Array<{ text: string }> }).content[0].text;
     expect(text).toContain('extension tool "calendar_search"');

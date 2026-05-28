@@ -15,6 +15,8 @@ interface OutboundRecord {
   lastError?: string;
 }
 
+const RECORD_ID_PATTERN = /^[0-9a-f-]{36}$/i;
+
 function safeError(error: unknown): string {
   return error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
 }
@@ -27,6 +29,23 @@ function writeJsonAtomic(filePath: string, value: unknown): void {
   const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2), "utf-8");
   fs.renameSync(tmp, filePath);
+}
+
+function isOutboundRecord(value: unknown, platform: Platform): value is OutboundRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<OutboundRecord>;
+  return (
+    record.platform === platform &&
+    typeof record.id === "string" &&
+    RECORD_ID_PATTERN.test(record.id) &&
+    typeof record.channelId === "string" &&
+    typeof record.text === "string" &&
+    typeof record.attempts === "number" &&
+    Number.isInteger(record.attempts) &&
+    record.attempts >= 0 &&
+    typeof record.createdAt === "string" &&
+    typeof record.updatedAt === "string"
+  );
 }
 
 export class DurableOutboundBridge implements ChannelBridge {
@@ -133,9 +152,11 @@ export class DurableOutboundBridge implements ChannelBridge {
       if (!entry.endsWith(".json")) continue;
       const filePath = path.join(this.queueDir, entry);
       try {
-        const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as OutboundRecord;
-        if (parsed.platform === this.platform && parsed.id && parsed.channelId && typeof parsed.text === "string") {
+        const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+        if (isOutboundRecord(parsed, this.platform)) {
           records.push(parsed);
+        } else {
+          console.warn(`[outbound] Ignoring invalid queue file ${filePath}`);
         }
       } catch (error) {
         console.warn(`[outbound] Ignoring unreadable queue file ${filePath}: ${safeError(error)}`);
