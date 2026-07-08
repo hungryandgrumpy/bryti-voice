@@ -68,6 +68,7 @@ describe("createEventsWatcher", () => {
       watcher.start();
       watcher.stop();
       expect(fs.existsSync(eventsDir)).toBe(true);
+      expect(fs.statSync(eventsDir).mode & 0o777).toBe(0o700);
     });
 
     it("writes instance file on start and removes it on stop", () => {
@@ -78,6 +79,7 @@ describe("createEventsWatcher", () => {
       const instance = JSON.parse(fs.readFileSync(instancePath, "utf-8"));
       expect(instance.eventsDir).toBe(eventsDir);
       expect(instance.allowedUsers).toContain("123");
+      expect(fs.statSync(instancePath).mode & 0o777).toBe(0o600);
       watcher.stop();
       expect(fs.existsSync(instancePath)).toBe(false);
     });

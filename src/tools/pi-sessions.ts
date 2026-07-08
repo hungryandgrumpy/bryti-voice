@@ -9,7 +9,7 @@
  * The encoded dir replaces / with - and wraps with --.
  *
  * Running detection uses three signals:
- * 1. bryti-bridge socket exists at ~/.pi/agent/sockets/<session-id>-<token>.sock
+ * 1. pi-bridge socket exists at ~/.pi/agent/sockets/<session-id>-<token>.sock
  * 2. A pi process has matching cwd (via /proc/<pid>/cwd)
  * 3. Session file was modified in the last 60 seconds
  */
@@ -20,7 +20,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type, type Static } from "@sinclair/typebox";
 import { toolError, toolSuccess } from "./result.js";
 
@@ -336,7 +336,7 @@ function findBridgeSocket(sessionId: string): string | null {
   const dir = bridgeSocketsDir();
   try {
     for (const f of fs.readdirSync(dir)) {
-      if (f.startsWith(sessionId) && f.endsWith(".sock")) {
+      if (f.startsWith(`${sessionId}-`) && f.endsWith(".sock")) {
         return path.join(dir, f);
       }
     }
@@ -345,7 +345,7 @@ function findBridgeSocket(sessionId: string): string | null {
 }
 
 /**
- * Send a message to a running pi session via the bryti-bridge extension socket.
+ * Send a message to a running pi session via the pi-bridge extension socket.
  * Returns null on success, or an error message on failure.
  */
 function sendViaBridge(sessionId: string, text: string): Promise<string | null> {
@@ -353,7 +353,7 @@ function sendViaBridge(sessionId: string, text: string): Promise<string | null> 
     const sockPath = findBridgeSocket(sessionId);
 
     if (!sockPath) {
-      resolve("Bridge socket not found. The pi session may not have the bryti-bridge extension installed.");
+      resolve("Bridge socket not found. The pi session may not have the pi-bridge extension installed.");
       return;
     }
 
@@ -543,7 +543,7 @@ export function createPiSessionTools(): AgentTool<any>[] {
     label: "pi_session_inject",
     description:
       "Inject a user message into a pi coding agent session. For running sessions, " +
-      "sends via the bryti-bridge extension (requires the extension to be installed). " +
+      "sends via the pi-bridge extension (requires the extension to be installed). " +
       "For stopped sessions, appends to the session file so the message appears when " +
       "the session is resumed. Use to steer, leave instructions, or add context.",
     parameters: injectSchema,
@@ -586,7 +586,7 @@ export function createPiSessionTools(): AgentTool<any>[] {
         // Bridge failed; can't inject into running session without it
         return toolError(
           `Session is running but bridge injection failed: ${bridgeError}. ` +
-          "Either install the bryti-bridge pi extension, wait for the session to stop, " +
+          "Either install the pi-bridge pi extension, wait for the session to stop, " +
           "or ask the user to relay the message.",
         );
       }

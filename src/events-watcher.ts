@@ -7,7 +7,7 @@
  * for the target user.
  *
  * Discovery: on start() bryti writes ~/.pi/agent/bryti-instance.json with the
- * events directory path and allowed user IDs. The bryti-bridge extension in pi
+ * events directory path and allowed user IDs. The pi-bridge extension in pi
  * reads this file to find the events directory without needing an env var.
  * The file is removed on stop().
  *
@@ -70,12 +70,15 @@ function instanceFilePath(): string {
  */
 function writeInstanceFile(evDir: string, allowed: Set<string>): void {
   try {
-    fs.mkdirSync(path.join(os.homedir(), ".pi", "agent"), { recursive: true });
+    const agentDir = path.join(os.homedir(), ".pi", "agent");
+    fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(agentDir, 0o700); } catch { /* best effort */ }
     fs.writeFileSync(
       instanceFilePath(),
       JSON.stringify({ eventsDir: evDir, allowedUsers: [...allowed] }, null, 2),
-      "utf-8",
+      { encoding: "utf-8", mode: 0o600 },
     );
+    try { fs.chmodSync(instanceFilePath(), 0o600); } catch { /* best effort */ }
   } catch (err) {
     console.warn(`[events] Could not write instance file: ${(err as Error).message}`);
   }
@@ -212,7 +215,8 @@ export function createEventsWatcher(config: Config, enqueue: EnqueueFn): EventsW
 
   return {
     start(): void {
-      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      try { fs.chmodSync(dir, 0o700); } catch { /* best effort */ }
 
       // Write presence file so pi extensions can discover the events directory.
       writeInstanceFile(dir, allowed);
