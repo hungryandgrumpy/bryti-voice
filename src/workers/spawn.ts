@@ -13,8 +13,8 @@ import {
   DefaultResourceLoader,
   SessionManager,
   SettingsManager,
-} from "@mariozechner/pi-coding-agent";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+} from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Config, ThinkingLevel } from "../config.js";
 import type { MemoryStore } from "../memory/store.js";
 import { embed } from "../memory/embeddings.js";

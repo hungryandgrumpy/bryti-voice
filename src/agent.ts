@@ -16,7 +16,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -25,7 +25,7 @@ import {
   SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import type { Config } from "./config.js";
 import type { CoreMemory } from "./memory/core-memory.js";
 import { repairToolUseResultPairing } from "./compaction/transcript-repair.js";

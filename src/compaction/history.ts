@@ -6,7 +6,7 @@
  * edge cases where a very long session survives compaction intact.
  */
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 /**
  * Return the last `limit` user turns (and their responses) from a message list.

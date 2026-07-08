@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Type } from "@sinclair/typebox";
 import { quarantineInvalidExtensionTools, validateToolSchema } from "./schema-validation.js";
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 describe("validateToolSchema", () => {
   it("accepts ordinary object schemas", () => {

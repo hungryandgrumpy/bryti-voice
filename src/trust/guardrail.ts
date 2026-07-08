@@ -14,7 +14,7 @@
  * reason, it defaults to ASK (fail-safe, not fail-open).
  */
 
-import { completeSimple } from "@mariozechner/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 import type { Config } from "../config.js";
 import { createModelInfra, resolveFirstModel, type ModelInfra } from "../model-infra.js";
 import { withTimeout } from "../util/timeout.js";

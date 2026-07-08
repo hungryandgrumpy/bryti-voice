@@ -47,8 +47,8 @@ vi.mock("../memory/embeddings.js", () => ({
   disposeEmbeddings: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", async (importActual) => {
-  const actual = await importActual<typeof import("@mariozechner/pi-coding-agent")>();
+vi.mock("@earendil-works/pi-coding-agent", async (importActual) => {
+  const actual = await importActual<typeof import("@earendil-works/pi-coding-agent")>();
   return {
     ...actual,
     createAgentSession: vi.fn().mockImplementation(async (options: { customTools?: Array<{ name: string }> }) => {

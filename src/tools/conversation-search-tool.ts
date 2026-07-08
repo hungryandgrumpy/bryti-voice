@@ -2,7 +2,7 @@
  * Conversation search tool.
  */
 
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import { searchConversations } from "../memory/conversation-search.js";

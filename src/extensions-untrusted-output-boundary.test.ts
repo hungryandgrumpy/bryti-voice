@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import untrustedOutputBoundary from "../defaults/extensions/untrusted-output-boundary.js";
 
 type ToolResultHandler = Parameters<ExtensionAPI["on"]>[1];

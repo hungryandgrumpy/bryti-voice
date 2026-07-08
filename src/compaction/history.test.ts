@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { limitHistoryTurns } from "./history.js";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 function userMsg(text: string): AgentMessage {
   return { role: "user", content: [{ type: "text", text }], timestamp: Date.now() } as AgentMessage;

@@ -22,7 +22,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { completeSimple } from "@mariozechner/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { withTimeout } from "../util/timeout.js";
 import type { Config } from "../config.js";
 import type { ProjectionResolution, ProjectionStore } from "./store.js";

@@ -8,7 +8,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import { toolError, toolSuccess } from "../tools/result.js";

@@ -2,7 +2,7 @@
  * Shared helpers for building AgentToolResult objects.
  */
 
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 
 /**
  * Extract a string message from any thrown value.

@@ -7,7 +7,7 @@
  * tools pass through without checks.
  */
 
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   checkPermission,
   setPendingApproval,

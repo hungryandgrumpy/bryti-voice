@@ -5,8 +5,8 @@ import {
 } from "./agent.js";
 import { buildToolSection } from "./system-prompt.js";
 import { resolveModel } from "./model-infra.js";
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Config } from "./config.js";
 
 // Minimal config for tests

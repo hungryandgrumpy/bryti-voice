@@ -7,7 +7,7 @@
  * matching the original behavior. Direct web access is an explicit opt-in group.
  */
 
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { createFileTools } from "./files.js";
 import { createSystemLogTool } from "./system-log.js";

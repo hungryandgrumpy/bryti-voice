@@ -24,7 +24,7 @@
 
 import https from "node:https";
 import http from "node:http";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 

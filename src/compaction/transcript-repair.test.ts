@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { repairToolUseResultPairing } from "./transcript-repair.js";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 // Helpers to build typed messages
 function userMsg(text: string): AgentMessage {
