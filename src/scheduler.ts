@@ -341,7 +341,12 @@ export function createScheduler(
             console.log(`[projections] user=${userId} exact-time check: ${due.length} item(s) due`);
             const dueByTarget = groupDueByTarget(due, fallbackTarget);
 
-            // Settle each projection: rearm recurring ones, mark one-offs as passed.
+            // Settle each projection before enqueueing the synthetic message, preserving
+            // the existing fire-once semantics. In production onMessage only enqueues into
+            // MessageQueue, which catches processing and transport failures internally, so
+            // awaiting onMessage is not a reliable delivery acknowledgement. Offline retry
+            // semantics need a separate queue-level/delivery-ack design.
+            //
             // Use the projection's scheduled time (not `now`) as the base for
             // computing the next occurrence.  The lookahead window fires
             // projections up to 15 min early, so using `now` would compute the
