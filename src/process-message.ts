@@ -414,6 +414,7 @@ export async function getOrLoadSession(
       await triggerRestart(state, { userId, channelId, platform, text: "", raw: null }, reason);
     },
     projectionStore,
+    { userId, channelId, platform },
   );
 
   const trustContext: TrustWrapperContext = {

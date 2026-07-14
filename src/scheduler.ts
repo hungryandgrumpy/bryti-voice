@@ -22,9 +22,10 @@
 import { Cron } from "croner";
 import type { Config } from "./config.js";
 import type { IncomingMessage, Platform } from "./channels/types.js";
-import { createProjectionStore, formatProjectionsForPrompt, runReflection } from "./projection/index.js";
+import { createProjectionStore, formatProjectionsForPrompt, runReflection, type Projection } from "./projection/index.js";
 import { isActiveNow } from "./active-hours.js";
 import { getUserTimezone } from "./time.js";
+import { createDeviceStore } from "./web-e2ee/device-store.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -188,7 +189,55 @@ export function getSchedulerTargets(config: Config): SchedulerTarget[] {
       addTarget(targets, { userId, channelId: userId, platform: "threema" });
     }
   }
+  if (config.web_e2ee.enabled) {
+    try {
+      const deviceStore = createDeviceStore(config.data_dir);
+      for (const device of deviceStore.list()) {
+        if (device.status !== "active") continue;
+        addTarget(targets, {
+          userId: device.deviceId,
+          channelId: device.deviceId,
+          platform: "web_e2ee",
+        });
+      }
+    } catch (err) {
+      console.warn(`[web_e2ee] Could not load paired devices for scheduler targets: ${(err as Error).message}`);
+    }
+  }
   return [...targets.values()];
+}
+
+function targetsByUserId(targets: SchedulerTarget[]): Map<string, SchedulerTarget[]> {
+  const grouped = new Map<string, SchedulerTarget[]>();
+  for (const target of targets) {
+    const existing = grouped.get(target.userId) ?? [];
+    existing.push(target);
+    grouped.set(target.userId, existing);
+  }
+  return grouped;
+}
+
+export function targetFromProjection(projection: Projection): SchedulerTarget | null {
+  if (!projection.target_user_id || !projection.target_channel_id || !projection.target_platform) {
+    return null;
+  }
+  return {
+    userId: projection.target_user_id,
+    channelId: projection.target_channel_id,
+    platform: projection.target_platform as Platform,
+  };
+}
+
+export function groupDueByTarget(due: Projection[], fallbackTarget: SchedulerTarget): Map<string, { target: SchedulerTarget; projections: Projection[] }> {
+  const grouped = new Map<string, { target: SchedulerTarget; projections: Projection[] }>();
+  for (const projection of due) {
+    const target = targetFromProjection(projection) ?? fallbackTarget;
+    const key = targetKey(target);
+    const entry = grouped.get(key) ?? { target, projections: [] };
+    entry.projections.push(projection);
+    grouped.set(key, entry);
+  }
+  return grouped;
 }
 
 /**
@@ -259,6 +308,7 @@ export function createScheduler(
    */
   function startExactTimeCheck(): void {
     const targets = getSchedulerTargets(config);
+    const groupedTargets = targetsByUserId(targets);
     if (targets.length === 0) return;
 
     const exactJob = new Cron(
@@ -268,8 +318,9 @@ export function createScheduler(
           return; // Silent skip — fires every 5 min, no need to log each one
         }
 
-        for (const target of targets) {
-          const userId = target.userId;
+        for (const [userId, userTargets] of groupedTargets) {
+          const fallbackTarget = userTargets[0];
+          if (!fallbackTarget) continue;
           const store = createProjectionStore(userId, config.data_dir);
           try {
             store.evaluateDependencies();
@@ -288,7 +339,7 @@ export function createScheduler(
               continue;
             }
             console.log(`[projections] user=${userId} exact-time check: ${due.length} item(s) due`);
-            const formatted = formatProjectionsForPrompt(due, 10);
+            const dueByTarget = groupDueByTarget(due, fallbackTarget);
 
             // Settle each projection: rearm recurring ones, mark one-offs as passed.
             // Use the projection's scheduled time (not `now`) as the base for
@@ -314,26 +365,29 @@ export function createScheduler(
               }
             }
 
-            // raw.type marks this as a scheduler message so processMessage() can
-            // distinguish it from a real user message and skip crash checkpoints.
-            const msg: IncomingMessage = {
-              channelId: target.channelId,
-              userId: target.userId,
-              text:
-                `[Scheduled reminder]\n\nThe following reminder(s) are due now:\n\n` +
-                `${formatted}\n\n` +
-                `For each item:\n` +
-                `1. Search your memory for related context (use memory_archival_search)\n` +
-                `2. Execute any actions described in the reminder (check email, check calendar, etc.)\n` +
-                `3. Send the user a helpful, natural message with your findings\n\n` +
-                `Only reply NOOP if the reminder is purely informational and requires no action or message.`,
-              platform: target.platform,
-              raw: { type: "projection_exact_check" },
-            };
-            try {
-              await onMessage(msg);
-            } catch (err) {
-              console.error(`[projections] exact-time check failed for ${userId}:`, (err as Error).message);
+            for (const { target, projections } of dueByTarget.values()) {
+              const formatted = formatProjectionsForPrompt(projections, 10);
+              // raw.type marks this as a scheduler message so processMessage() can
+              // distinguish it from a real user message and skip crash checkpoints.
+              const msg: IncomingMessage = {
+                channelId: target.channelId,
+                userId: target.userId,
+                text:
+                  `[Scheduled reminder]\n\nThe following reminder(s) are due now:\n\n` +
+                  `${formatted}\n\n` +
+                  `For each item:\n` +
+                  `1. Search your memory for related context (use memory_archival_search)\n` +
+                  `2. Execute any actions described in the reminder (check email, check calendar, etc.)\n` +
+                  `3. Send the user a helpful, natural message with your findings\n\n` +
+                  `Only reply NOOP if the reminder is purely informational and requires no action or message.`,
+                platform: target.platform,
+                raw: { type: "projection_exact_check" },
+              };
+              try {
+                await onMessage(msg);
+              } catch (err) {
+                console.error(`[projections] exact-time check failed for ${userId}:`, (err as Error).message);
+              }
             }
           } finally {
             store.close();
@@ -364,6 +418,7 @@ export function createScheduler(
    */
   function startReflectionJob(): void {
     const targets = getSchedulerTargets(config);
+    const groupedTargets = targetsByUserId(targets);
     if (targets.length === 0) {
       return;
     }
@@ -379,8 +434,7 @@ export function createScheduler(
     const job = new Cron(
       "*/30 * * * *",
       async () => {
-        for (const target of targets) {
-          const userId = target.userId;
+        for (const userId of groupedTargets.keys()) {
           const until = backoffUntil.get(userId) ?? 0;
           // During a backoff window, skip silently — the cron still fires every
           // 30 min so recovery is detected promptly once the window expires.
